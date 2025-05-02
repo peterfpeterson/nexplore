@@ -10,7 +10,7 @@ categories = ["command-line-utilities", "science", "visualization"]
 repository = "https://github.com/garryod/nexplore"
 
 [dependencies]
-anyhow = { version = "1.0.95" }
+anyhow = { version = "1.0.98" }
 clap = { version = "4.5.37", features = ["derive"] }
 crossterm = { version = "0.28.1" }
 hdf5 = { version = "0.8.1" }
