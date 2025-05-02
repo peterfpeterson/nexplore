@@ -2,6 +2,7 @@ name: Code
 
 on:
   push:
+    branches: [ "main" ]
   pull_request:
 
 jobs:
@@ -27,7 +28,7 @@ jobs:
         with:
           command: fmt
           args: --check
-        
+
       - name: Lint with Clippy
         uses: actions-rs/cargo@v1.0.3
         with:
@@ -64,4 +65,3 @@ jobs:
           args: >
             --all-targets
             --all-features
-
