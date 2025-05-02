@@ -13,6 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+    - run: cargo --version
     - uses: actions/checkout@v4
     - name: Format
       run: cargo fmt --check
