@@ -1,6 +1,9 @@
 use crate::widgets::tree::TreeItem;
 use anyhow::{anyhow, Context};
-use hdf5::{dataset::Layout, filters::Filter, Dataset, File, Group, LinkInfo, LinkType};
+use hdf5::{
+    dataset::Layout, filters::Filter, types::TypeDescriptor, Dataset, File, Group, LinkInfo,
+    LinkType,
+};
 use std::{fmt::Display, path::Path};
 
 #[derive(Debug, Clone)]
@@ -62,6 +65,7 @@ pub struct DatasetInfo {
     pub link_type: LinkKind,
     pub shape: Vec<usize>,
     pub layout_info: DatasetLayoutInfo,
+    pub dtype_descr: TypeDescriptor,
 }
 
 #[derive(Debug, Clone)]
@@ -89,12 +93,14 @@ impl DatasetInfo {
             },
             Layout::Virtual => DatasetLayoutInfo::Virtial {},
         };
+        let dtype_descr = dataset.dtype().unwrap().to_descriptor().unwrap();
         Self {
             name,
             id,
             link_type: link.link_type.into(),
             shape,
             layout_info,
+            dtype_descr,
         }
     }
 }
