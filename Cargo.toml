@@ -1,6 +1,6 @@
 [package]
 name = "nexplore"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Garry O'Donnell <garry.euan.odonnell@ntlworld.com>"]
 description = "A Terminal User Interface (TUI) for exploring hdf5 & NeXus files"
@@ -11,10 +11,13 @@ repository = "https://github.com/garryod/nexplore"
 
 [dependencies]
 anyhow = { version = "1.0.99" }
-clap = { version = "4.5.45", features = ["derive"] }
+clap = { version = "4.5.45", features = ["derive", "wrap_help"] }
 crossterm = { version = "0.28.1" }
 hdf5 = { version = "0.10.1", package = "hdf5-metno" }
 hdf5-sys = { version = "0.10.1", package = "hdf5-metno-sys", features = ["static"] }
 humansize = { version = "2.1.3" }
 ratatui = { version = "0.29.0" }
 regex = { version = "1.11.1" }
+
+[dev-dependencies]
+env = "1.0.1"

@@ -6,6 +6,9 @@ use hdf5::{
 };
 use std::{fmt::Display, path::Path};
 
+#[cfg(test)]
+use std::path::PathBuf;
+
 #[derive(Debug, Clone)]
 pub enum EntityInfo {
     Group(GroupInfo),
@@ -190,4 +193,34 @@ impl FileInfo {
             .map(TreeItem::from)
             .collect::<Vec<_>>()
     }
+}
+
+// ---------- TESTS START HERE
+
+#[cfg(test)]
+fn get_file_path(filename: &str) -> PathBuf {
+    // cargo sets where project root is
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    PathBuf::from(manifest_dir).join(filename);
+}
+
+#[test]
+fn load_nexus_file() {
+    let filepath = get_file_path("tests/simple_nexus.h5");
+    assert!(filepath.exists());
+
+    // load the nexus file and perform test on root
+    let filehandle = FileInfo::read(filepath).unwrap();
+    assert!(filehandle.name.ends_with("simple_nexus.h5"));
+    assert_eq!(filehandle.size, 45656); // observed
+
+    // other attempt at the tree
+    assert_eq!(filehandle.entities.len(), 2); // root node and links
+                                              //println!("{:?}", filehandle.entities[0]);
+                                              // let entry = GroupInfo::from(filehandle.entities[0]);
+                                              //assert_eq!(filehandle.entities[0]["name"], "entry");
+
+    // get to the tree
+    let filetree = filehandle.to_tree_items();
+    assert_eq!(filetree.len(), 2); // root node and links
 }
