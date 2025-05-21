@@ -107,6 +107,7 @@ impl Widget for EntityInfo {
 }
 
 const GROUP_COLOR: Color = Color::Blue;
+const NXCLASS: &str = "NX_class";
 
 impl Widget for GroupInfo {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -117,12 +118,23 @@ impl Widget for GroupInfo {
                 Cell::from(self.link_kind.to_string()),
             ]),
         ];
+        if self.attrs.contains_key(NXCLASS) {
+            rows.insert(
+                0,
+                Row::new(vec![
+                    Cell::from(NXCLASS),
+                    Cell::from(Text::from(self.attrs.get(NXCLASS).unwrap().to_string())),
+                ]),
+            );
+        }
         // add the attributes
         for (key, value) in &self.attrs {
-            rows.push(Row::new(vec![
-                Cell::from(key.to_string()),
-                Cell::from(value.to_string()),
-            ]));
+            if key != NXCLASS {
+                rows.push(Row::new(vec![
+                    Cell::from(key.to_string()),
+                    Cell::from(value.to_string()),
+                ]));
+            }
         }
 
         Table::new(rows, [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
