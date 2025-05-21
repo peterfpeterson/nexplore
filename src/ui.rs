@@ -110,23 +110,29 @@ const GROUP_COLOR: Color = Color::Blue;
 
 impl Widget for GroupInfo {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        Table::new(
-            [
-                Row::new(vec![Cell::from("ID"), Cell::from(self.id.to_string())]),
-                Row::new(vec![
-                    Cell::from("Link Type"),
-                    Cell::from(self.link_kind.to_string()),
-                ]),
-            ],
-            [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
-        )
-        .block(
-            Block::default()
-                .title(self.name.clone())
-                .border_style(Style::new().fg(GROUP_COLOR))
-                .borders(Borders::ALL),
-        )
-        .render(area, buf);
+        let mut rows = vec![
+            Row::new(vec![Cell::from("ID"), Cell::from(self.id.to_string())]),
+            Row::new(vec![
+                Cell::from("Link Type"),
+                Cell::from(self.link_kind.to_string()),
+            ]),
+        ];
+        // add the attributes
+        for (key, value) in &self.attrs {
+            rows.push(Row::new(vec![
+                Cell::from(key.to_string()),
+                Cell::from(value.to_string()),
+            ]));
+        }
+
+        Table::new(rows, [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+            .block(
+                Block::default()
+                    .title(self.name.clone())
+                    .border_style(Style::new().fg(GROUP_COLOR))
+                    .borders(Borders::ALL),
+            )
+            .render(area, buf);
     }
 }
 
@@ -191,6 +197,13 @@ impl Widget for DatasetInfo {
                 ]);
             }
             DatasetLayoutInfo::Virtial {} => {}
+        }
+        // add the attributes
+        for (key, value) in &self.attrs {
+            rows.push(Row::new(vec![
+                Cell::from(key.to_string()),
+                Cell::from(value.to_string()),
+            ]));
         }
 
         Table::new(rows, [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])

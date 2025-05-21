@@ -50,9 +50,6 @@ impl GroupInfo {
         let name = group.name().split('/').next_back().unwrap().to_string();
         let id = group.id();
         let attrs = get_attrs(&group);
-        for (key, value) in &attrs {
-            println!("{} / {}", key, value);
-        }
         let entities = group
             .iter_visit_default(Vec::new(), |group, key, link, entities| {
                 let entity = if let Ok(group) = group.group(key) {
@@ -117,9 +114,6 @@ impl DatasetInfo {
         };
         let dtype_descr = dataset.dtype().unwrap().to_descriptor().unwrap();
         let attrs = get_attrs(&dataset);
-        for (key, value) in &attrs {
-            println!("{} / {}", key, value);
-        }
 
         Self {
             name,
