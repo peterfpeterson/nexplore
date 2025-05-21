@@ -2,8 +2,9 @@ use crate::widgets::tree::TreeItem;
 use anyhow::{anyhow, Context};
 use hdf5::{
     dataset::Layout, filters::Filter, types::TypeDescriptor, Dataset, File, Group, LinkInfo,
-    LinkType,
+    LinkType, Location,
 };
+use std::collections::HashMap;
 use std::{fmt::Display, path::Path};
 
 #[cfg(test)]
@@ -24,18 +25,34 @@ impl From<EntityInfo> for TreeItem<'_> {
     }
 }
 
+pub fn get_attrs(location: &Location) -> HashMap<String, String> {
+    let mut attrs = HashMap::new();
+    if let Ok(attr_names) = location.attr_names() {
+        for name in attr_names {
+            let value = location.attr(&name).unwrap();
+            attrs.insert(name, format!("{:?}", value));
+        }
+    };
+    attrs
+}
+
 #[derive(Debug, Clone)]
 pub struct GroupInfo {
     pub name: String,
     pub id: i64,
     pub link_kind: LinkKind,
     pub entities: Vec<EntityInfo>,
+    pub attrs: HashMap<String, String>,
 }
 
 impl GroupInfo {
     fn try_from_group_and_link(group: Group, link: LinkInfo) -> Result<Self, anyhow::Error> {
         let name = group.name().split('/').next_back().unwrap().to_string();
         let id = group.id();
+        let attrs = get_attrs(&group);
+        for (key, value) in &attrs {
+            println!("{} / {}", key, value);
+        }
         let entities = group
             .iter_visit_default(Vec::new(), |group, key, link, entities| {
                 let entity = if let Ok(group) = group.group(key) {
@@ -57,6 +74,7 @@ impl GroupInfo {
             id,
             link_kind: link.link_type.into(),
             entities,
+            attrs,
         })
     }
 }
@@ -69,6 +87,7 @@ pub struct DatasetInfo {
     pub shape: Vec<usize>,
     pub layout_info: DatasetLayoutInfo,
     pub dtype_descr: TypeDescriptor,
+    pub attrs: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +116,11 @@ impl DatasetInfo {
             Layout::Virtual => DatasetLayoutInfo::Virtial {},
         };
         let dtype_descr = dataset.dtype().unwrap().to_descriptor().unwrap();
+        let attrs = get_attrs(&dataset);
+        for (key, value) in &attrs {
+            println!("{} / {}", key, value);
+        }
+
         Self {
             name,
             id,
@@ -104,6 +128,7 @@ impl DatasetInfo {
             shape,
             layout_info,
             dtype_descr,
+            attrs,
         }
     }
 }
@@ -201,7 +226,7 @@ impl FileInfo {
 fn get_file_path(filename: &str) -> PathBuf {
     // cargo sets where project root is
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    PathBuf::from(manifest_dir).join(filename);
+    PathBuf::from(manifest_dir).join(filename)
 }
 
 #[test]
