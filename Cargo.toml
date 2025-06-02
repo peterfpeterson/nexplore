@@ -11,7 +11,7 @@ repository = "https://github.com/garryod/nexplore"
 
 [dependencies]
 anyhow = { version = "1.0.98" }
-clap = { version = "4.5.38", features = ["derive"] }
+clap = { version = "4.5.39", features = ["derive"] }
 crossterm = { version = "0.28.1" }
 hdf5 = { version = "0.10.1", package = "hdf5-metno" }
 hdf5-sys = { version = "0.10.1", package = "hdf5-metno-sys", features = ["static"] }
