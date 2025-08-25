@@ -17,7 +17,7 @@ jobs:
       run: |
         cargo --version
         rustup --version
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     - name: Cache
       uses: actions/cache@v4
       with:
