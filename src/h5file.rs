@@ -69,6 +69,12 @@ fn to_string(field: &Container) -> Result<String, anyhow::Error> {
         TypeDescriptor::Unsigned(hdf5::types::IntSize::U8) => {
             Ok(field.read_scalar::<u64>()?.to_string())
         }
+        TypeDescriptor::Float(hdf5::types::FloatSize::U4) => {
+            Ok(field.read_scalar::<f32>()?.to_string())
+        }
+        TypeDescriptor::Float(hdf5::types::FloatSize::U8) => {
+            Ok(field.read_scalar::<f64>()?.to_string())
+        }
         // Handle fixed-length ASCII string scalars and 1D arrays.
         TypeDescriptor::FixedAscii(size) => decode_fixed_width_strings(field, *size),
         // Handle fixed-length UTF-8 string
@@ -461,6 +467,12 @@ fn get_attrs_reads_ascii_and_unicode_strings() {
         .unwrap();
     unsigned_u8.as_writer().write_scalar(&64u64).unwrap();
 
+    let float_u4 = file.new_attr::<f32>().shape(()).create("float_u4").unwrap();
+    float_u4.as_writer().write_scalar(&3.5f32).unwrap();
+
+    let float_u8 = file.new_attr::<f64>().shape(()).create("float_u8").unwrap();
+    float_u8.as_writer().write_scalar(&7.25f64).unwrap();
+
     let attrs = get_attrs(&file);
 
     assert_eq!(attrs.get("fixed_ascii|string (len 11)").unwrap(), "ascii");
@@ -482,6 +494,8 @@ fn get_attrs_reads_ascii_and_unicode_strings() {
     assert_eq!(attrs.get("unsigned_u2|uint16").unwrap(), "16");
     assert_eq!(attrs.get("unsigned_u4|uint32").unwrap(), "42");
     assert_eq!(attrs.get("unsigned_u8|uint64").unwrap(), "64");
+    assert_eq!(attrs.get("float_u4|float32").unwrap(), "3.5");
+    assert_eq!(attrs.get("float_u8|float64").unwrap(), "7.25");
 
     std::fs::remove_file(test_file).unwrap();
 }
