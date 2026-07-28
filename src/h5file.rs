@@ -1,10 +1,16 @@
 use crate::widgets::tree::TreeItem;
 use anyhow::{anyhow, Context};
+use hdf5::sync::sync;
+use hdf5::types::{VarLenAscii, VarLenUnicode};
+use hdf5::Container;
 use hdf5::{
     dataset::Layout, filters::Filter, types::TypeDescriptor, Dataset, File, Group, LinkInfo,
     LinkType, Location,
 };
+use hdf5_sys::h5a::H5Aread;
 use std::collections::HashMap;
+#[cfg(test)]
+use std::str::FromStr;
 use std::{fmt::Display, path::Path};
 
 #[cfg(test)]
@@ -25,12 +31,84 @@ impl From<EntityInfo> for TreeItem<'_> {
     }
 }
 
+fn to_string(field: &Container) -> Result<String, anyhow::Error> {
+    // Get the data type descriptor for the attribute
+    let dtype = field.dtype()?.to_descriptor()?;
+    match &dtype {
+        // Handle variable-length ASCII string
+        TypeDescriptor::VarLenAscii => {
+            let value: VarLenAscii = field.read_scalar()?;
+            Ok(value.as_str().to_owned())
+        }
+        // Handle variable-length UTF-8 string
+        TypeDescriptor::VarLenUnicode => {
+            let value: VarLenUnicode = field.read_scalar()?;
+            Ok(value.as_str().to_owned())
+        }
+        // Handle fixed-length ASCII string scalars and 1D arrays.
+        TypeDescriptor::FixedAscii(size) => decode_fixed_width_strings(field, *size),
+        // Handle fixed-length UTF-8 string
+        TypeDescriptor::FixedUnicode(size) => decode_fixed_width_strings(field, *size),
+        _ => Err(anyhow!("unsupported attribute string type: {dtype}")),
+    }
+}
+
+fn decode_fixed_width_strings(
+    field: &Container,
+    element_width: usize,
+) -> Result<String, anyhow::Error> {
+    if element_width == 0 {
+        return Ok(String::new());
+    }
+
+    let dtype = field.dtype()?;
+    let mut raw = vec![0u8; field.storage_size() as usize];
+    let result = sync(|| unsafe { H5Aread(field.id(), dtype.id(), raw.as_mut_ptr().cast()) });
+    if result < 0 {
+        return Err(anyhow!("failed to read fixed-width string attribute bytes"));
+    }
+
+    if field.is_scalar() {
+        return Ok(decode_fixed_width_string(&raw));
+    }
+
+    if field.ndim() != 1 {
+        return Err(anyhow!(
+            "unsupported fixed-width string shape: {:?}",
+            field.shape()
+        ));
+    }
+
+    Ok(raw
+        .chunks(element_width)
+        .map(decode_fixed_width_string)
+        .collect::<Vec<_>>()
+        .join(", "))
+}
+
+fn decode_fixed_width_string(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim_end_matches('\0')
+        .to_owned()
+}
+
 pub fn get_attrs(location: &Location) -> HashMap<String, String> {
     let mut attrs = HashMap::new();
     if let Ok(attr_names) = location.attr_names() {
         for name in attr_names {
-            let value = location.attr(&name).unwrap();
-            attrs.insert(name, format!("{:?}", value));
+            let attr = location.attr(&name).unwrap();
+            let value = to_string(&attr).unwrap_or_else(|_| {
+                format!("<{:?}>", attr.dtype().unwrap().to_descriptor().unwrap())
+            });
+            let mut label = name.clone();
+            if name != "NX_class" && name != "target" {
+                label = format!(
+                    "{}|{}",
+                    name,
+                    attr.dtype().unwrap().to_descriptor().unwrap()
+                )
+            }
+            attrs.insert(label, value);
         }
     };
     attrs
@@ -242,4 +320,84 @@ fn load_nexus_file() {
     // get to the tree
     let filetree = filehandle.to_tree_items();
     assert_eq!(filetree.len(), 2); // root node and links
+}
+
+#[test]
+fn get_attrs_reads_ascii_and_unicode_strings() {
+    use hdf5::types::{FixedAscii, FixedUnicode, VarLenAscii, VarLenUnicode};
+
+    let test_file =
+        std::env::temp_dir().join(format!("nexplore-string-attrs-{}.h5", std::process::id()));
+    let _ = std::fs::remove_file(&test_file);
+
+    let file = File::create(&test_file).unwrap();
+
+    let fixed_ascii = file
+        .new_attr::<FixedAscii<11>>()
+        .shape(())
+        .create("fixed_ascii")
+        .unwrap();
+    fixed_ascii
+        .as_writer()
+        .write_scalar(&FixedAscii::<11>::from_ascii(b"ascii").unwrap())
+        .unwrap();
+
+    let fixed_ascii_1d = file
+        .new_attr::<FixedAscii<11>>()
+        .shape([2])
+        .create("fixed_ascii_1d")
+        .unwrap();
+    fixed_ascii_1d
+        .as_writer()
+        .write(&[
+            FixedAscii::<11>::from_ascii(b"alpha").unwrap(),
+            FixedAscii::<11>::from_ascii(b"beta").unwrap(),
+        ])
+        .unwrap();
+
+    let fixed_unicode = file
+        .new_attr::<FixedUnicode<8>>()
+        .shape(())
+        .create("fixed_unicode")
+        .unwrap();
+    fixed_unicode
+        .as_writer()
+        .write_scalar(&FixedUnicode::<8>::from_str("h5").unwrap())
+        .unwrap();
+
+    let var_ascii = file
+        .new_attr::<VarLenAscii>()
+        .shape(())
+        .create("var_ascii")
+        .unwrap();
+    var_ascii
+        .as_writer()
+        .write_scalar(&VarLenAscii::from_ascii(b"value").unwrap())
+        .unwrap();
+
+    let var_unicode = file
+        .new_attr::<VarLenUnicode>()
+        .shape(())
+        .create("var_unicode")
+        .unwrap();
+    var_unicode
+        .as_writer()
+        .write_scalar(&VarLenUnicode::from_str("cafe\u{e9}").unwrap())
+        .unwrap();
+
+    let attrs = get_attrs(&file);
+
+    assert_eq!(attrs.get("fixed_ascii|string (len 11)").unwrap(), "ascii");
+    assert_eq!(
+        attrs.get("fixed_ascii_1d|string (len 11)").unwrap(),
+        "alpha, beta"
+    );
+    assert_eq!(attrs.get("fixed_unicode|unicode (len 8)").unwrap(), "h5");
+    assert_eq!(attrs.get("var_ascii|string (var len)").unwrap(), "value");
+    assert_eq!(
+        attrs.get("var_unicode|unicode (var len)").unwrap(),
+        "cafe\u{e9}"
+    );
+
+    std::fs::remove_file(test_file).unwrap();
 }
