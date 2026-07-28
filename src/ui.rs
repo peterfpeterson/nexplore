@@ -107,26 +107,44 @@ impl Widget for EntityInfo {
 }
 
 const GROUP_COLOR: Color = Color::Blue;
+const NXCLASS: &str = "NX_class";
 
 impl Widget for GroupInfo {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        Table::new(
-            [
-                Row::new(vec![Cell::from("ID"), Cell::from(self.id.to_string())]),
+        let mut rows = vec![
+            Row::new(vec![Cell::from("ID"), Cell::from(self.id.to_string())]),
+            Row::new(vec![
+                Cell::from("Link Type"),
+                Cell::from(self.link_kind.to_string()),
+            ]),
+        ];
+        if self.attrs.contains_key(NXCLASS) {
+            rows.insert(
+                0,
                 Row::new(vec![
-                    Cell::from("Link Type"),
-                    Cell::from(self.link_kind.to_string()),
+                    Cell::from(NXCLASS),
+                    Cell::from(Text::from(self.attrs.get(NXCLASS).unwrap().to_string())),
                 ]),
-            ],
-            [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
-        )
-        .block(
-            Block::default()
-                .title(self.name.clone())
-                .border_style(Style::new().fg(GROUP_COLOR))
-                .borders(Borders::ALL),
-        )
-        .render(area, buf);
+            );
+        }
+        // add the attributes
+        for (key, value) in &self.attrs {
+            if key != NXCLASS {
+                rows.push(Row::new(vec![
+                    Cell::from(key.to_string()),
+                    Cell::from(value.to_string()),
+                ]));
+            }
+        }
+
+        Table::new(rows, [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+            .block(
+                Block::default()
+                    .title(self.name.clone())
+                    .border_style(Style::new().fg(GROUP_COLOR))
+                    .borders(Borders::ALL),
+            )
+            .render(area, buf);
     }
 }
 
@@ -145,14 +163,18 @@ const DATASET_COLOR: Color = Color::Green;
 impl Widget for DatasetInfo {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let mut rows = vec![
-            Row::new(vec![Cell::from("ID"), Cell::from(self.id.to_string())]),
             Row::new(vec![
-                Cell::from("Link Type"),
-                Cell::from(self.link_type.to_string()),
+                Cell::from("Data Type"),
+                Cell::from(self.dtype_descr.to_string()),
             ]),
             Row::new(vec![
                 Cell::from("Shape"),
                 Cell::from(format!("{:?}", self.shape)),
+            ]),
+            Row::new(vec![Cell::from("ID"), Cell::from(self.id.to_string())]),
+            Row::new(vec![
+                Cell::from("Link Type"),
+                Cell::from(self.link_type.to_string()),
             ]),
             Row::new(vec![
                 Cell::from("Layout"),
@@ -187,6 +209,13 @@ impl Widget for DatasetInfo {
                 ]);
             }
             DatasetLayoutInfo::Virtial {} => {}
+        }
+        // add the attributes
+        for (key, value) in &self.attrs {
+            rows.push(Row::new(vec![
+                Cell::from(key.to_string()),
+                Cell::from(value.to_string()),
+            ]));
         }
 
         Table::new(rows, [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])

@@ -24,10 +24,15 @@ struct Cli {
 }
 
 fn main() {
+    // get the command line options
     let args = Cli::parse();
-    let mut terminal = setup_terminal().unwrap();
+    // get a handle to the file
     let file_info = FileInfo::read(args.path).unwrap();
+    // setup the basic curses terminal
+    let mut terminal = setup_terminal().unwrap();
+    // start the program
     run(&mut terminal, file_info).unwrap();
+    // shutdown the program
     restore_terminal(&mut terminal).unwrap();
 }
 

@@ -1,7 +1,20 @@
 use crate::widgets::tree::TreeItem;
 use anyhow::{anyhow, Context};
-use hdf5::{dataset::Layout, filters::Filter, Dataset, File, Group, LinkInfo, LinkType};
+use hdf5::sync::sync;
+use hdf5::types::{VarLenAscii, VarLenUnicode};
+use hdf5::Container;
+use hdf5::{
+    dataset::Layout, filters::Filter, types::TypeDescriptor, Dataset, File, Group, LinkInfo,
+    LinkType, Location,
+};
+use hdf5_sys::h5a::H5Aread;
+use std::collections::HashMap;
+#[cfg(test)]
+use std::str::FromStr;
 use std::{fmt::Display, path::Path};
+
+#[cfg(test)]
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum EntityInfo {
@@ -18,18 +31,133 @@ impl From<EntityInfo> for TreeItem<'_> {
     }
 }
 
+fn to_string(field: &Container) -> Result<String, anyhow::Error> {
+    // Get the data type descriptor for the attribute
+    let dtype = field.dtype()?.to_descriptor()?;
+    match &dtype {
+        // Handle variable-length ASCII string
+        TypeDescriptor::VarLenAscii => {
+            let value: VarLenAscii = field.read_scalar()?;
+            Ok(value.as_str().to_owned())
+        }
+        // Handle variable-length UTF-8 string
+        TypeDescriptor::VarLenUnicode => {
+            let value: VarLenUnicode = field.read_scalar()?;
+            Ok(value.as_str().to_owned())
+        }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U1) => {
+            Ok(field.read_scalar::<i8>()?.to_string())
+        }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U2) => {
+            Ok(field.read_scalar::<i16>()?.to_string())
+        }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U4) => {
+            Ok(field.read_scalar::<i32>()?.to_string())
+        }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U8) => {
+            Ok(field.read_scalar::<i64>()?.to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U1) => {
+            Ok(field.read_scalar::<u8>()?.to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U2) => {
+            Ok(field.read_scalar::<u16>()?.to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U4) => {
+            Ok(field.read_scalar::<u32>()?.to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U8) => {
+            Ok(field.read_scalar::<u64>()?.to_string())
+        }
+        TypeDescriptor::Float(hdf5::types::FloatSize::U4) => {
+            Ok(field.read_scalar::<f32>()?.to_string())
+        }
+        TypeDescriptor::Float(hdf5::types::FloatSize::U8) => {
+            Ok(field.read_scalar::<f64>()?.to_string())
+        }
+        // Handle fixed-length ASCII string scalars and 1D arrays.
+        TypeDescriptor::FixedAscii(size) => decode_fixed_width_strings(field, *size),
+        // Handle fixed-length UTF-8 string
+        TypeDescriptor::FixedUnicode(size) => decode_fixed_width_strings(field, *size),
+        _ => Err(anyhow!("unsupported attribute string type: {dtype}")),
+    }
+}
+
+fn decode_fixed_width_strings(
+    field: &Container,
+    element_width: usize,
+) -> Result<String, anyhow::Error> {
+    if element_width == 0 {
+        return Ok(String::new());
+    }
+
+    let dtype = field.dtype()?;
+    let mut raw = vec![0u8; field.storage_size() as usize];
+    let result = sync(|| unsafe { H5Aread(field.id(), dtype.id(), raw.as_mut_ptr().cast()) });
+    if result < 0 {
+        return Err(anyhow!("failed to read fixed-width string attribute bytes"));
+    }
+
+    if field.is_scalar() {
+        return Ok(decode_fixed_width_string(&raw));
+    }
+
+    if field.ndim() != 1 {
+        return Err(anyhow!(
+            "unsupported fixed-width string shape: {:?}",
+            field.shape()
+        ));
+    }
+
+    Ok(raw
+        .chunks(element_width)
+        .map(decode_fixed_width_string)
+        .collect::<Vec<_>>()
+        .join(", "))
+}
+
+fn decode_fixed_width_string(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim_end_matches('\0')
+        .to_owned()
+}
+
+pub fn get_attrs(location: &Location) -> HashMap<String, String> {
+    let mut attrs = HashMap::new();
+    if let Ok(attr_names) = location.attr_names() {
+        for name in attr_names {
+            let attr = location.attr(&name).unwrap();
+            let value = to_string(&attr).unwrap_or_else(|_| {
+                format!("<{:?}>", attr.dtype().unwrap().to_descriptor().unwrap())
+            });
+            let mut label = name.clone();
+            if name != "NX_class" && name != "target" {
+                label = format!(
+                    "{}|{}",
+                    name,
+                    attr.dtype().unwrap().to_descriptor().unwrap()
+                )
+            }
+            attrs.insert(label, value);
+        }
+    };
+    attrs
+}
+
 #[derive(Debug, Clone)]
 pub struct GroupInfo {
     pub name: String,
     pub id: i64,
     pub link_kind: LinkKind,
     pub entities: Vec<EntityInfo>,
+    pub attrs: HashMap<String, String>,
 }
 
 impl GroupInfo {
     fn try_from_group_and_link(group: Group, link: LinkInfo) -> Result<Self, anyhow::Error> {
         let name = group.name().split('/').next_back().unwrap().to_string();
         let id = group.id();
+        let attrs = get_attrs(&group);
         let entities = group
             .iter_visit_default(Vec::new(), |group, key, link, entities| {
                 let entity = if let Ok(group) = group.group(key) {
@@ -51,6 +179,7 @@ impl GroupInfo {
             id,
             link_kind: link.link_type.into(),
             entities,
+            attrs,
         })
     }
 }
@@ -62,6 +191,8 @@ pub struct DatasetInfo {
     pub link_type: LinkKind,
     pub shape: Vec<usize>,
     pub layout_info: DatasetLayoutInfo,
+    pub dtype_descr: TypeDescriptor,
+    pub attrs: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,12 +220,17 @@ impl DatasetInfo {
             },
             Layout::Virtual => DatasetLayoutInfo::Virtial {},
         };
+        let dtype_descr = dataset.dtype().unwrap().to_descriptor().unwrap();
+        let attrs = get_attrs(&dataset);
+
         Self {
             name,
             id,
             link_type: link.link_type.into(),
             shape,
             layout_info,
+            dtype_descr,
+            attrs,
         }
     }
 }
@@ -184,4 +320,182 @@ impl FileInfo {
             .map(TreeItem::from)
             .collect::<Vec<_>>()
     }
+}
+
+// ---------- TESTS START HERE
+
+#[cfg(test)]
+fn get_file_path(filename: &str) -> PathBuf {
+    // cargo sets where project root is
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    PathBuf::from(manifest_dir).join(filename)
+}
+
+#[test]
+fn load_nexus_file() {
+    let filepath = get_file_path("tests/simple_nexus.h5");
+    assert!(filepath.exists());
+
+    // load the nexus file and perform test on root
+    let filehandle = FileInfo::read(filepath).unwrap();
+    assert!(filehandle.name.ends_with("simple_nexus.h5"));
+    assert_eq!(filehandle.size, 45656); // observed
+
+    // other attempt at the tree
+    assert_eq!(filehandle.entities.len(), 2); // root node and links
+                                              //println!("{:?}", filehandle.entities[0]);
+                                              // let entry = GroupInfo::from(filehandle.entities[0]);
+                                              //assert_eq!(filehandle.entities[0]["name"], "entry");
+
+    // get to the tree
+    let filetree = filehandle.to_tree_items();
+    assert_eq!(filetree.len(), 2); // root node and links
+}
+
+#[test]
+fn get_attrs_reads_ascii_and_unicode_strings() {
+    use hdf5::types::{FixedAscii, FixedUnicode, VarLenAscii, VarLenUnicode};
+
+    let test_file =
+        std::env::temp_dir().join(format!("nexplore-string-attrs-{}.h5", std::process::id()));
+    let _ = std::fs::remove_file(&test_file);
+
+    let file = File::create(&test_file).unwrap();
+
+    let fixed_ascii = file
+        .new_attr::<FixedAscii<11>>()
+        .shape(())
+        .create("fixed_ascii")
+        .unwrap();
+    fixed_ascii
+        .as_writer()
+        .write_scalar(&FixedAscii::<11>::from_ascii(b"ascii").unwrap())
+        .unwrap();
+
+    let fixed_ascii_1d = file
+        .new_attr::<FixedAscii<11>>()
+        .shape([2])
+        .create("fixed_ascii_1d")
+        .unwrap();
+    fixed_ascii_1d
+        .as_writer()
+        .write(&[
+            FixedAscii::<11>::from_ascii(b"alpha").unwrap(),
+            FixedAscii::<11>::from_ascii(b"beta").unwrap(),
+        ])
+        .unwrap();
+
+    let fixed_unicode = file
+        .new_attr::<FixedUnicode<8>>()
+        .shape(())
+        .create("fixed_unicode")
+        .unwrap();
+    fixed_unicode
+        .as_writer()
+        .write_scalar(&FixedUnicode::<8>::from_str("h5").unwrap())
+        .unwrap();
+
+    let var_ascii = file
+        .new_attr::<VarLenAscii>()
+        .shape(())
+        .create("var_ascii")
+        .unwrap();
+    var_ascii
+        .as_writer()
+        .write_scalar(&VarLenAscii::from_ascii(b"value").unwrap())
+        .unwrap();
+
+    let var_unicode = file
+        .new_attr::<VarLenUnicode>()
+        .shape(())
+        .create("var_unicode")
+        .unwrap();
+    var_unicode
+        .as_writer()
+        .write_scalar(&VarLenUnicode::from_str("cafe\u{e9}").unwrap())
+        .unwrap();
+
+    let unsigned_u4 = file
+        .new_attr::<u32>()
+        .shape(())
+        .create("unsigned_u4")
+        .unwrap();
+    unsigned_u4.as_writer().write_scalar(&42u32).unwrap();
+
+    let signed_u1 = file.new_attr::<i8>().shape(()).create("signed_u1").unwrap();
+    signed_u1.as_writer().write_scalar(&-8i8).unwrap();
+
+    let signed_u2 = file
+        .new_attr::<i16>()
+        .shape(())
+        .create("signed_u2")
+        .unwrap();
+    signed_u2.as_writer().write_scalar(&-16i16).unwrap();
+
+    let signed_u4 = file
+        .new_attr::<i32>()
+        .shape(())
+        .create("signed_u4")
+        .unwrap();
+    signed_u4.as_writer().write_scalar(&-32i32).unwrap();
+
+    let signed_u8 = file
+        .new_attr::<i64>()
+        .shape(())
+        .create("signed_u8")
+        .unwrap();
+    signed_u8.as_writer().write_scalar(&-64i64).unwrap();
+
+    let unsigned_u1 = file
+        .new_attr::<u8>()
+        .shape(())
+        .create("unsigned_u1")
+        .unwrap();
+    unsigned_u1.as_writer().write_scalar(&8u8).unwrap();
+
+    let unsigned_u2 = file
+        .new_attr::<u16>()
+        .shape(())
+        .create("unsigned_u2")
+        .unwrap();
+    unsigned_u2.as_writer().write_scalar(&16u16).unwrap();
+
+    let unsigned_u8 = file
+        .new_attr::<u64>()
+        .shape(())
+        .create("unsigned_u8")
+        .unwrap();
+    unsigned_u8.as_writer().write_scalar(&64u64).unwrap();
+
+    let float_u4 = file.new_attr::<f32>().shape(()).create("float_u4").unwrap();
+    float_u4.as_writer().write_scalar(&3.5f32).unwrap();
+
+    let float_u8 = file.new_attr::<f64>().shape(()).create("float_u8").unwrap();
+    float_u8.as_writer().write_scalar(&7.25f64).unwrap();
+
+    let attrs = get_attrs(&file);
+
+    assert_eq!(attrs.get("fixed_ascii|string (len 11)").unwrap(), "ascii");
+    assert_eq!(
+        attrs.get("fixed_ascii_1d|string (len 11)").unwrap(),
+        "alpha, beta"
+    );
+    assert_eq!(attrs.get("fixed_unicode|unicode (len 8)").unwrap(), "h5");
+    assert_eq!(attrs.get("var_ascii|string (var len)").unwrap(), "value");
+    assert_eq!(
+        attrs.get("var_unicode|unicode (var len)").unwrap(),
+        "cafe\u{e9}"
+    );
+    assert_eq!(attrs.get("signed_u1|int8").unwrap(), "-8");
+    assert_eq!(attrs.get("signed_u2|int16").unwrap(), "-16");
+    assert_eq!(attrs.get("signed_u4|int32").unwrap(), "-32");
+    assert_eq!(attrs.get("signed_u8|int64").unwrap(), "-64");
+    assert_eq!(attrs.get("unsigned_u1|uint8").unwrap(), "8");
+    assert_eq!(attrs.get("unsigned_u2|uint16").unwrap(), "16");
+    assert_eq!(attrs.get("unsigned_u4|uint32").unwrap(), "42");
+    assert_eq!(attrs.get("unsigned_u8|uint64").unwrap(), "64");
+    assert_eq!(attrs.get("float_u4|float32").unwrap(), "3.5");
+    assert_eq!(attrs.get("float_u8|float64").unwrap(), "7.25");
+
+    std::fs::remove_file(test_file).unwrap();
 }
