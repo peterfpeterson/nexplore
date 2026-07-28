@@ -45,6 +45,30 @@ fn to_string(field: &Container) -> Result<String, anyhow::Error> {
             let value: VarLenUnicode = field.read_scalar()?;
             Ok(value.as_str().to_owned())
         }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U1) => {
+            Ok(field.read_scalar::<i8>()?.to_string())
+        }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U2) => {
+            Ok(field.read_scalar::<i16>()?.to_string())
+        }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U4) => {
+            Ok(field.read_scalar::<i32>()?.to_string())
+        }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U8) => {
+            Ok(field.read_scalar::<i64>()?.to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U1) => {
+            Ok(field.read_scalar::<u8>()?.to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U2) => {
+            Ok(field.read_scalar::<u16>()?.to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U4) => {
+            Ok(field.read_scalar::<u32>()?.to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U8) => {
+            Ok(field.read_scalar::<u64>()?.to_string())
+        }
         // Handle fixed-length ASCII string scalars and 1D arrays.
         TypeDescriptor::FixedAscii(size) => decode_fixed_width_strings(field, *size),
         // Handle fixed-length UTF-8 string
@@ -385,6 +409,58 @@ fn get_attrs_reads_ascii_and_unicode_strings() {
         .write_scalar(&VarLenUnicode::from_str("cafe\u{e9}").unwrap())
         .unwrap();
 
+    let unsigned_u4 = file
+        .new_attr::<u32>()
+        .shape(())
+        .create("unsigned_u4")
+        .unwrap();
+    unsigned_u4.as_writer().write_scalar(&42u32).unwrap();
+
+    let signed_u1 = file.new_attr::<i8>().shape(()).create("signed_u1").unwrap();
+    signed_u1.as_writer().write_scalar(&-8i8).unwrap();
+
+    let signed_u2 = file
+        .new_attr::<i16>()
+        .shape(())
+        .create("signed_u2")
+        .unwrap();
+    signed_u2.as_writer().write_scalar(&-16i16).unwrap();
+
+    let signed_u4 = file
+        .new_attr::<i32>()
+        .shape(())
+        .create("signed_u4")
+        .unwrap();
+    signed_u4.as_writer().write_scalar(&-32i32).unwrap();
+
+    let signed_u8 = file
+        .new_attr::<i64>()
+        .shape(())
+        .create("signed_u8")
+        .unwrap();
+    signed_u8.as_writer().write_scalar(&-64i64).unwrap();
+
+    let unsigned_u1 = file
+        .new_attr::<u8>()
+        .shape(())
+        .create("unsigned_u1")
+        .unwrap();
+    unsigned_u1.as_writer().write_scalar(&8u8).unwrap();
+
+    let unsigned_u2 = file
+        .new_attr::<u16>()
+        .shape(())
+        .create("unsigned_u2")
+        .unwrap();
+    unsigned_u2.as_writer().write_scalar(&16u16).unwrap();
+
+    let unsigned_u8 = file
+        .new_attr::<u64>()
+        .shape(())
+        .create("unsigned_u8")
+        .unwrap();
+    unsigned_u8.as_writer().write_scalar(&64u64).unwrap();
+
     let attrs = get_attrs(&file);
 
     assert_eq!(attrs.get("fixed_ascii|string (len 11)").unwrap(), "ascii");
@@ -398,6 +474,14 @@ fn get_attrs_reads_ascii_and_unicode_strings() {
         attrs.get("var_unicode|unicode (var len)").unwrap(),
         "cafe\u{e9}"
     );
+    assert_eq!(attrs.get("signed_u1|int8").unwrap(), "-8");
+    assert_eq!(attrs.get("signed_u2|int16").unwrap(), "-16");
+    assert_eq!(attrs.get("signed_u4|int32").unwrap(), "-32");
+    assert_eq!(attrs.get("signed_u8|int64").unwrap(), "-64");
+    assert_eq!(attrs.get("unsigned_u1|uint8").unwrap(), "8");
+    assert_eq!(attrs.get("unsigned_u2|uint16").unwrap(), "16");
+    assert_eq!(attrs.get("unsigned_u4|uint32").unwrap(), "42");
+    assert_eq!(attrs.get("unsigned_u8|uint64").unwrap(), "64");
 
     std::fs::remove_file(test_file).unwrap();
 }
