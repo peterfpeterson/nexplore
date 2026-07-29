@@ -347,7 +347,7 @@ fn dataset_plot_data(
     dataset: &Dataset,
     minimum_samples: usize,
 ) -> Result<Option<Vec<(f64, f64)>>, anyhow::Error> {
-    if dataset.shape().len() != 1 {
+    if dataset.shape().len() != 1 || dataset.size() <= 1 {
         return Ok(None);
     }
 
@@ -902,6 +902,8 @@ fn dataset_info_reads_scalar_and_string_values() {
         EntityInfo::Group(_) => panic!("expected dataset"),
     };
     assert_eq!(array_info.plot_data.as_ref().unwrap().len(), 2);
+    assert!(!file_info.load_plot_data(vec![3], 8).unwrap());
+    assert!(!file_info.load_plot_data(vec![4], 8).unwrap());
     assert!(!file_info.load_plot_data(vec![5], 8).unwrap());
     assert!(file_info.unload_plot_data(vec![7]).unwrap());
     let array_info = match file_info.entity(vec![7]).unwrap() {
