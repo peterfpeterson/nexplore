@@ -5,7 +5,7 @@ use hdf5::types::{VarLenAscii, VarLenUnicode};
 use hdf5::Container;
 use hdf5::{
     dataset::Layout, filters::Filter, types::TypeDescriptor, Dataset, File, Group, LinkInfo,
-    LinkType, Location,
+    LinkType, Location, SliceOrIndex,
 };
 use hdf5_sys::h5a::H5Aread;
 use hdf5_sys::h5d::H5Dread;
@@ -25,7 +25,7 @@ pub enum EntityInfo {
     Dataset(DatasetInfo),
 }
 
-impl From<EntityInfo> for TreeItem<'_> {
+impl From<EntityInfo> for TreeItem<'static> {
     fn from(value: EntityInfo) -> Self {
         match value {
             EntityInfo::Group(info) => TreeItem::from(info),
@@ -239,10 +239,12 @@ pub struct DatasetInfo {
     pub id: i64,
     pub link_type: LinkKind,
     pub data_value: String,
+    pub plot_data: Option<Vec<(f64, f64)>>,
     pub shape: Vec<usize>,
     pub layout_info: DatasetLayoutInfo,
     pub dtype_descr: TypeDescriptor,
     pub attrs: HashMap<String, String>,
+    dataset: Dataset,
 }
 
 #[derive(Debug, Clone)]
@@ -279,11 +281,24 @@ impl DatasetInfo {
             id,
             link_type: link.link_type.into(),
             data_value,
+            plot_data: None,
             shape,
             layout_info,
             dtype_descr,
             attrs,
+            dataset,
         }
+    }
+
+    pub fn load_plot_data(&mut self, minimum_samples: usize) -> Result<bool, anyhow::Error> {
+        if self.plot_data.is_none() {
+            self.plot_data = dataset_plot_data(&self.dataset, minimum_samples)?;
+        }
+        Ok(self.plot_data.is_some())
+    }
+
+    pub fn unload_plot_data(&mut self) -> bool {
+        self.plot_data.take().is_some()
     }
 }
 
@@ -326,6 +341,96 @@ fn dataset_value(dataset: &Dataset) -> Result<String, anyhow::Error> {
         }
         _ => Ok(String::new()),
     }
+}
+
+fn dataset_plot_data(
+    dataset: &Dataset,
+    minimum_samples: usize,
+) -> Result<Option<Vec<(f64, f64)>>, anyhow::Error> {
+    if dataset.shape().len() != 1 {
+        return Ok(None);
+    }
+
+    let sample_step = plot_sample_step(dataset.size(), minimum_samples);
+    let span = SliceOrIndex::SliceTo {
+        start: 0,
+        step: sample_step,
+        end: dataset.size(),
+        block: 1,
+    };
+    let dtype = dataset.dtype()?.to_descriptor()?;
+    let values: Vec<f64> = match dtype {
+        TypeDescriptor::Integer(hdf5::types::IntSize::U1) => dataset
+            .read_slice_1d::<i8, _>(span)?
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Integer(hdf5::types::IntSize::U2) => dataset
+            .read_slice_1d::<i16, _>(span)?
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Integer(hdf5::types::IntSize::U4) => dataset
+            .read_slice_1d::<i32, _>(span)?
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Integer(hdf5::types::IntSize::U8) => dataset
+            .read_slice_1d::<i64, _>(span)?
+            .iter()
+            .map(|value| *value as f64)
+            .collect(),
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U1) => dataset
+            .read_slice_1d::<u8, _>(span)?
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U2) => dataset
+            .read_slice_1d::<u16, _>(span)?
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U4) => dataset
+            .read_slice_1d::<u32, _>(span)?
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U8) => dataset
+            .read_slice_1d::<u64, _>(span)?
+            .iter()
+            .map(|value| *value as f64)
+            .collect(),
+        TypeDescriptor::Float(hdf5::types::FloatSize::U4) => dataset
+            .read_slice_1d::<f32, _>(span)?
+            .iter()
+            .copied()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Float(hdf5::types::FloatSize::U8) => dataset
+            .read_slice_1d::<f64, _>(span)?
+            .iter()
+            .copied()
+            .collect(),
+        _ => return Ok(None),
+    };
+
+    Ok(Some(
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| ((index * sample_step) as f64, value))
+            .collect(),
+    ))
+}
+
+fn plot_sample_step(dataset_size: usize, minimum_samples: usize) -> usize {
+    (dataset_size / minimum_samples.max(1)).max(1)
 }
 
 fn is_string_dtype(dtype: &TypeDescriptor) -> bool {
@@ -416,7 +521,42 @@ impl FileInfo {
         Ok(entity.clone())
     }
 
-    pub fn to_tree_items(&self) -> Vec<TreeItem<'_>> {
+    pub fn load_plot_data(
+        &mut self,
+        index: Vec<usize>,
+        minimum_samples: usize,
+    ) -> Result<bool, anyhow::Error> {
+        match self.entity_mut(index)? {
+            EntityInfo::Dataset(dataset) => dataset.load_plot_data(minimum_samples),
+            EntityInfo::Group(_) => Ok(false),
+        }
+    }
+
+    pub fn unload_plot_data(&mut self, index: Vec<usize>) -> Result<bool, anyhow::Error> {
+        Ok(match self.entity_mut(index)? {
+            EntityInfo::Dataset(dataset) => dataset.unload_plot_data(),
+            EntityInfo::Group(_) => false,
+        })
+    }
+
+    fn entity_mut(&mut self, index: Vec<usize>) -> Result<&mut EntityInfo, anyhow::Error> {
+        let mut indices = index.into_iter();
+        let mut entity = self
+            .entities
+            .get_mut(indices.next().context("Index was empty")?)
+            .context("No entity at index")?;
+        for idx in indices {
+            match entity {
+                EntityInfo::Group(group) => {
+                    entity = group.entities.get_mut(idx).context("No entity at index")?
+                }
+                EntityInfo::Dataset(_) => Err(anyhow!("Cannot index into a dataset"))?,
+            }
+        }
+        Ok(entity)
+    }
+
+    pub fn to_tree_items(&self) -> Vec<TreeItem<'static>> {
         self.entities
             .iter()
             .cloned()
@@ -604,6 +744,35 @@ fn get_attrs_reads_ascii_and_unicode_strings() {
 }
 
 #[test]
+fn dataset_plot_data_reads_a_strided_hdf5_span() {
+    let test_file =
+        std::env::temp_dir().join(format!("nexplore-plot-span-{}.h5", std::process::id()));
+    let _ = std::fs::remove_file(&test_file);
+
+    let file = File::create(&test_file).unwrap();
+    let dataset = file
+        .new_dataset::<i32>()
+        .shape([1_000])
+        .create("values")
+        .unwrap();
+    dataset
+        .as_writer()
+        .write(&(0..1_000).collect::<Vec<_>>())
+        .unwrap();
+
+    let points = dataset_plot_data(&dataset, 400).unwrap().unwrap();
+
+    assert!(points.len() >= 400);
+    assert!(points.len() < dataset.size());
+    assert_eq!(points.first(), Some(&(0.0, 0.0)));
+    assert_eq!(points.last(), Some(&(998.0, 998.0)));
+
+    drop(dataset);
+    drop(file);
+    std::fs::remove_file(test_file).unwrap();
+}
+
+#[test]
 fn dataset_info_reads_scalar_and_string_values() {
     use hdf5::types::{FixedAscii, VarLenUnicode};
 
@@ -678,7 +847,7 @@ fn dataset_info_reads_scalar_and_string_values() {
         .unwrap();
     array.as_writer().write(&[1, 2]).unwrap();
 
-    let file_info = FileInfo::read(&test_file).unwrap();
+    let mut file_info = FileInfo::read(&test_file).unwrap();
 
     let scalar_info = match file_info.entity(vec![0]).unwrap() {
         EntityInfo::Dataset(dataset) => dataset,
@@ -718,9 +887,29 @@ fn dataset_info_reads_scalar_and_string_values() {
     assert_eq!(scalar_unsigned_info.data_value, "16");
     assert_eq!(shape_one_int_info.data_value, "99");
     assert_eq!(shape_one_float_info.data_value, "2.5");
+    assert!(shape_one_int_info.plot_data.is_none());
+    assert!(shape_one_float_info.plot_data.is_none());
     assert_eq!(string_info.data_value, "alpha, beta");
+    assert!(string_info.plot_data.is_none());
     assert_eq!(unicode_info.data_value, "cafe\u{e9}");
+    assert!(unicode_info.plot_data.is_none());
     assert!(array_info.data_value.is_empty());
+    assert!(array_info.plot_data.is_none());
+
+    assert!(file_info.load_plot_data(vec![7], 8).unwrap());
+    let array_info = match file_info.entity(vec![7]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    assert_eq!(array_info.plot_data.as_ref().unwrap().len(), 2);
+    assert!(!file_info.load_plot_data(vec![5], 8).unwrap());
+    assert!(file_info.unload_plot_data(vec![7]).unwrap());
+    let array_info = match file_info.entity(vec![7]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    assert!(array_info.plot_data.is_none());
+    assert!(!file_info.unload_plot_data(vec![7]).unwrap());
 
     std::fs::remove_file(test_file).unwrap();
 }

@@ -8,6 +8,8 @@ use ratatui::{
 use regex::Regex;
 use std::borrow::Cow;
 
+const DEFAULT_EXPANSION_DEPTH: usize = 2;
+
 #[derive(Debug, Clone)]
 pub struct TreeItem<'a> {
     contents: Text<'a>,
@@ -45,7 +47,8 @@ pub struct TreeState<'a> {
 }
 
 impl<'a> TreeState<'a> {
-    pub fn new(items: Vec<TreeItem<'a>>) -> Self {
+    pub fn new(mut items: Vec<TreeItem<'a>>) -> Self {
+        set_expansion_depth(&mut items, DEFAULT_EXPANSION_DEPTH);
         TreeState {
             items,
             position: Default::default(),
@@ -248,6 +251,13 @@ impl<'a> TreeState<'a> {
     }
 }
 
+fn set_expansion_depth(items: &mut [TreeItem<'_>], remaining_depth: usize) {
+    for item in items {
+        item.expanded = remaining_depth > 0;
+        set_expansion_depth(&mut item.children, remaining_depth.saturating_sub(1));
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Tree<'i> {
     style: Style,
@@ -326,5 +336,39 @@ impl<'a> StatefulWidget for Tree<'a> {
             buf.set_style(cursor_area, Style::new().bg(Color::White));
             Paragraph::new(search_text).render(search_area, buf);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TreeItem, TreeState};
+    use ratatui::{style::Color, text::Text};
+
+    fn item(name: &'static str, children: Vec<TreeItem<'static>>) -> TreeItem<'static> {
+        TreeItem::new(Text::raw(name), Color::White, children)
+    }
+
+    #[test]
+    fn tree_initially_expands_only_the_top_two_levels() {
+        let state = TreeState::new(vec![item(
+            "level one",
+            vec![item(
+                "level two",
+                vec![item("level three", vec![item("level four", Vec::new())])],
+            )],
+        )]);
+
+        assert!(state.items[0].expanded);
+        assert!(state.items[0].children[0].expanded);
+        assert!(!state.items[0].children[0].children[0].expanded);
+        assert!(!state.items[0].children[0].children[0].children[0].expanded);
+
+        let visible_indices = state
+            .items()
+            .into_iter()
+            .filter(|item| item.visible)
+            .map(|item| item.index)
+            .collect::<Vec<_>>();
+        assert_eq!(visible_indices, vec![vec![0], vec![0, 0], vec![0, 0, 0]]);
     }
 }

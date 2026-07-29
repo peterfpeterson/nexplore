@@ -2,7 +2,9 @@ mod h5file;
 mod ui;
 pub mod widgets;
 
-use crate::ui::Screen;
+use crate::{
+    ui::Screen, widgets::help::render_help_dialog, widgets::plot::HORIZONTAL_PIXELS_PER_COLUMN,
+};
 use anyhow::Context;
 use clap::Parser;
 use crossterm::{
@@ -14,6 +16,8 @@ use h5file::FileInfo;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io::Stdout, path::PathBuf, time::Duration};
 use ui::{ContentsTree, FileName, FileSize};
+
+const PLOT_SOURCE_SAMPLES_PER_PIXEL: usize = 4;
 
 /// A TUI for exploring HDF5 and NeXus files.
 #[derive(Debug, Parser)]
@@ -58,21 +62,33 @@ enum Mode {
     Search {
         search: String,
     },
+    Help,
 }
 
 fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    file_info: FileInfo,
+    mut file_info: FileInfo,
 ) -> Result<(), anyhow::Error> {
     let mut mode = Mode::default();
     let screen = Screen::default();
     let file_name = FileName::new(file_info.name.clone());
     let file_size = FileSize::new(file_info.size);
     let mut contents_tree = ContentsTree::new(file_info.to_tree_items());
+    let mut plotted_entity = None;
     loop {
+        let selected_entity = contents_tree
+            .state
+            .position()
+            .context("No selected entity")?;
+        if plotted_entity.as_ref() != Some(&selected_entity) {
+            if let Some(previous_entity) = plotted_entity.take() {
+                file_info.unload_plot_data(previous_entity)?;
+            }
+        }
         let entity_info = file_info
-            .entity(contents_tree.state.position().unwrap())
+            .entity(selected_entity)
             .context("Could not find selected entity")?;
+        let show_help = matches!(mode, Mode::Help);
         terminal.draw(|frame| {
             screen.render(
                 frame,
@@ -80,11 +96,33 @@ fn run(
                 &file_size,
                 &mut contents_tree,
                 entity_info,
-            )
+            );
+            if show_help {
+                render_help_dialog(frame);
+            }
         })?;
         if event::poll(Duration::from_millis(250))? {
-            if let Event::Key(key) = event::read()? {
+            let input = event::read()?;
+            if let Event::Resize(width, _) = &input {
+                if let Some(selected_entity) = plotted_entity.clone() {
+                    file_info.unload_plot_data(selected_entity.clone())?;
+                    if !file_info.load_plot_data(
+                        selected_entity,
+                        plot_minimum_samples(*width, contents_tree.state.width()),
+                    )? {
+                        plotted_entity = None;
+                    }
+                }
+            }
+            if let Event::Key(key) = input {
                 match (&mut mode, key.code, key.modifiers) {
+                    (
+                        &mut Mode::Help,
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?'),
+                        _,
+                    ) => mode = Mode::default(),
+                    (&mut Mode::Help, _, _) => {}
+                    (&mut Mode::Normal, KeyCode::Char('?'), _) => mode = Mode::Help,
                     (&mut Mode::Normal, KeyCode::Esc | KeyCode::Char('q'), KeyModifiers::NONE) => {
                         break
                     }
@@ -118,6 +156,24 @@ fn run(
                         KeyCode::Right | KeyCode::Char('L'),
                         KeyModifiers::SHIFT,
                     ) => contents_tree.state.expand_all(),
+                    (&mut Mode::Normal, KeyCode::Char('p'), KeyModifiers::NONE) => {
+                        let selected_entity = contents_tree
+                            .state
+                            .position()
+                            .context("No selected entity")?;
+                        if plotted_entity.as_ref() == Some(&selected_entity) {
+                            file_info.unload_plot_data(selected_entity)?;
+                            plotted_entity = None;
+                        } else if file_info.load_plot_data(
+                            selected_entity.clone(),
+                            plot_minimum_samples(
+                                terminal.size()?.width,
+                                contents_tree.state.width(),
+                            ),
+                        )? {
+                            plotted_entity = Some(selected_entity);
+                        }
+                    }
                     (mode, KeyCode::Char('/'), KeyModifiers::NONE)
                         if matches!(mode, Mode::Normal) =>
                     {
@@ -152,4 +208,18 @@ fn run(
         }
     }
     Ok(())
+}
+
+fn plot_minimum_samples(terminal_width: u16, contents_width: u16) -> usize {
+    plot_horizontal_pixels(terminal_width, contents_width)
+        .saturating_mul(PLOT_SOURCE_SAMPLES_PER_PIXEL)
+}
+
+fn plot_horizontal_pixels(terminal_width: u16, contents_width: u16) -> usize {
+    usize::from(
+        terminal_width
+            .saturating_sub(contents_width)
+            .saturating_sub(2),
+    )
+    .saturating_mul(HORIZONTAL_PIXELS_PER_COLUMN)
 }
