@@ -7,6 +7,8 @@ use ratatui::{
     widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Widget},
 };
 
+pub const HORIZONTAL_PIXELS_PER_COLUMN: usize = 2;
+
 #[derive(Debug, Clone)]
 pub struct Plot {
     title: String,
@@ -49,7 +51,9 @@ impl Widget for Plot {
             .map(|point| point.0)
             .unwrap_or(1.0)
             .max(1.0);
-        let max_points = usize::from(area.width).saturating_mul(2).max(1);
+        let max_points = usize::from(area.width)
+            .saturating_mul(HORIZONTAL_PIXELS_PER_COLUMN)
+            .max(1);
         let points = smooth_points(&self.points, max_points);
         let (mut y_min, mut y_max) = points
             .iter()
