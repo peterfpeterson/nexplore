@@ -163,6 +163,7 @@ const DATASET_COLOR: Color = Color::Green;
 impl Widget for DatasetInfo {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let mut rows = vec![
+            Row::new(vec![Cell::from("Data Value"), Cell::from(self.data_value)]),
             Row::new(vec![
                 Cell::from("Data Type"),
                 Cell::from(self.dtype_descr.to_string()),
