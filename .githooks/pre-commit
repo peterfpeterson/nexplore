@@ -25,10 +25,17 @@ fi
 echo -e "cargo check: ......... ${GREEN}ok${NC}"
 
 # cargo rustfmt hook
-if ! cargo fmt -- --check
+if ! cargo fmt
 then
     echo -e "cargo rustfmt: ....... ${RED}nok${NC}"
-    echo -e "${RED}Pre-commit: Code style issues detected with rustfmt."
+    echo -e "${RED}Pre-commit: rustfmt failed."
+    exit 1
+fi
+
+if ! git diff --quiet -- src tests Cargo.toml Cargo.lock
+then
+    echo -e "cargo rustfmt: ....... ${RED}nok${NC}"
+    echo -e "${RED}Pre-commit: rustfmt updated files. Review and stage the changes, then commit again."
     exit 1
 fi
 
