@@ -2,7 +2,9 @@ mod h5file;
 mod ui;
 pub mod widgets;
 
-use crate::{ui::Screen, widgets::plot::HORIZONTAL_PIXELS_PER_COLUMN};
+use crate::{
+    ui::Screen, widgets::help::render_help_dialog, widgets::plot::HORIZONTAL_PIXELS_PER_COLUMN,
+};
 use anyhow::Context;
 use clap::Parser;
 use crossterm::{
@@ -60,6 +62,7 @@ enum Mode {
     Search {
         search: String,
     },
+    Help,
 }
 
 fn run(
@@ -85,6 +88,7 @@ fn run(
         let entity_info = file_info
             .entity(selected_entity)
             .context("Could not find selected entity")?;
+        let show_help = matches!(mode, Mode::Help);
         terminal.draw(|frame| {
             screen.render(
                 frame,
@@ -92,7 +96,10 @@ fn run(
                 &file_size,
                 &mut contents_tree,
                 entity_info,
-            )
+            );
+            if show_help {
+                render_help_dialog(frame);
+            }
         })?;
         if event::poll(Duration::from_millis(250))? {
             let input = event::read()?;
@@ -109,6 +116,13 @@ fn run(
             }
             if let Event::Key(key) = input {
                 match (&mut mode, key.code, key.modifiers) {
+                    (
+                        &mut Mode::Help,
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?'),
+                        _,
+                    ) => mode = Mode::default(),
+                    (&mut Mode::Help, _, _) => {}
+                    (&mut Mode::Normal, KeyCode::Char('?'), _) => mode = Mode::Help,
                     (&mut Mode::Normal, KeyCode::Esc | KeyCode::Char('q'), KeyModifiers::NONE) => {
                         break
                     }
