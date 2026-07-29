@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     buffer::Buffer,
     layout::{Constraint, Rect},
     style::{Color, Style},
     widgets::{Block, Borders, Cell, Clear, Row, Table, Widget},
-    Frame,
 };
 
 const README: &str = include_str!("../../README.md");
@@ -105,7 +105,7 @@ fn readme_keybindings() -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{readme_keybindings, HelpDialog, COLUMN_SPACING};
+    use super::{COLUMN_SPACING, HelpDialog, readme_keybindings};
     use ratatui::layout::Rect;
 
     #[test]

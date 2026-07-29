@@ -69,11 +69,13 @@ impl Widget for Plot {
             y_max += 1.0;
         }
 
-        Chart::new(vec![Dataset::default()
-            .graph_type(GraphType::Line)
-            .marker(symbols::Marker::Braille)
-            .style(Style::default().fg(Color::Green))
-            .data(&points)])
+        Chart::new(vec![
+            Dataset::default()
+                .graph_type(GraphType::Line)
+                .marker(symbols::Marker::Braille)
+                .style(Style::default().fg(Color::Green))
+                .data(&points),
+        ])
         .block(Block::default().title(self.title).borders(Borders::TOP))
         .x_axis(
             Axis::default()

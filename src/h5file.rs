@@ -1,11 +1,11 @@
 use crate::widgets::tree::TreeItem;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
+use hdf5::Container;
 use hdf5::sync::sync;
 use hdf5::types::{VarLenAscii, VarLenUnicode};
-use hdf5::Container;
 use hdf5::{
-    dataset::Layout, filters::Filter, types::TypeDescriptor, Dataset, File, Group, LinkInfo,
-    LinkType, Location, SliceOrIndex,
+    Dataset, File, Group, LinkInfo, LinkType, Location, SliceOrIndex, dataset::Layout,
+    filters::Filter, types::TypeDescriptor,
 };
 use hdf5_sys::h5a::H5Aread;
 use hdf5_sys::h5d::H5Dread;
@@ -586,9 +586,9 @@ fn load_nexus_file() {
 
     // other attempt at the tree
     assert_eq!(filehandle.entities.len(), 2); // root node and links
-                                              //println!("{:?}", filehandle.entities[0]);
-                                              // let entry = GroupInfo::from(filehandle.entities[0]);
-                                              //assert_eq!(filehandle.entities[0]["name"], "entry");
+    //println!("{:?}", filehandle.entities[0]);
+    // let entry = GroupInfo::from(filehandle.entities[0]);
+    //assert_eq!(filehandle.entities[0]["name"], "entry");
 
     // get to the tree
     let filetree = filehandle.to_tree_items();

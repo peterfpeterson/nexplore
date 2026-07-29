@@ -10,10 +10,10 @@ use clap::Parser;
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use h5file::FileInfo;
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{io::Stdout, path::PathBuf, time::Duration};
 use ui::{ContentsTree, FileName, FileSize};
 
@@ -80,10 +80,10 @@ fn run(
             .state
             .position()
             .context("No selected entity")?;
-        if plotted_entity.as_ref() != Some(&selected_entity) {
-            if let Some(previous_entity) = plotted_entity.take() {
-                file_info.unload_plot_data(previous_entity)?;
-            }
+        if plotted_entity.as_ref() != Some(&selected_entity)
+            && let Some(previous_entity) = plotted_entity.take()
+        {
+            file_info.unload_plot_data(previous_entity)?;
         }
         let entity_info = file_info
             .entity(selected_entity)
@@ -103,15 +103,15 @@ fn run(
         })?;
         if event::poll(Duration::from_millis(250))? {
             let input = event::read()?;
-            if let Event::Resize(width, _) = &input {
-                if let Some(selected_entity) = plotted_entity.clone() {
-                    file_info.unload_plot_data(selected_entity.clone())?;
-                    if !file_info.load_plot_data(
-                        selected_entity,
-                        plot_minimum_samples(*width, contents_tree.state.width()),
-                    )? {
-                        plotted_entity = None;
-                    }
+            if let Event::Resize(width, _) = &input
+                && let Some(selected_entity) = plotted_entity.clone()
+            {
+                file_info.unload_plot_data(selected_entity.clone())?;
+                if !file_info.load_plot_data(
+                    selected_entity,
+                    plot_minimum_samples(*width, contents_tree.state.width()),
+                )? {
+                    plotted_entity = None;
                 }
             }
             if let Event::Key(key) = input {
@@ -124,7 +124,7 @@ fn run(
                     (&mut Mode::Help, _, _) => {}
                     (&mut Mode::Normal, KeyCode::Char('?'), _) => mode = Mode::Help,
                     (&mut Mode::Normal, KeyCode::Esc | KeyCode::Char('q'), KeyModifiers::NONE) => {
-                        break
+                        break;
                     }
                     (&mut Mode::Normal, KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
                         contents_tree.state.move_up()

@@ -3,14 +3,14 @@ use crate::{
     widgets::plot::Plot,
     widgets::tree::{Tree, TreeItem, TreeState},
 };
-use humansize::{format_size, ToF64, Unsigned, BINARY};
+use humansize::{BINARY, ToF64, Unsigned, format_size};
 use ratatui::{
+    Frame,
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Text},
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Widget},
-    Frame,
 };
 
 const INFO_LABEL_MIN_WIDTH: u16 = 20;
