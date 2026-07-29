@@ -131,6 +131,30 @@ impl<'a> TreeState<'a> {
         self.search = search;
     }
 
+    pub fn width(&self) -> u16 {
+        let item_width = self
+            .items()
+            .iter()
+            .filter(|item| item.visible)
+            .flat_map(|item| {
+                let indent = 2 * (item.index.len() as u16).saturating_sub(1);
+                item.item
+                    .contents
+                    .lines
+                    .iter()
+                    .map(move |line| indent + line.width() as u16)
+            })
+            .max()
+            .unwrap_or(0);
+        let search_width = self
+            .search
+            .as_ref()
+            .map(|search| format!("\u{f002} {search}").chars().count() as u16 + 1)
+            .unwrap_or(0);
+
+        item_width.max(search_width).max("Contents".len() as u16) + 2
+    }
+
     fn items(&'a self) -> Vec<ComputedItem<'a>> {
         let search_regex = self.search.clone().map(|search| Regex::new(&search));
         let mut to_flatten = self

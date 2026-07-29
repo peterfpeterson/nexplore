@@ -12,11 +12,12 @@ use ratatui::{
     Frame,
 };
 
+const INFO_LABEL_MIN_WIDTH: u16 = 20;
+
 #[derive(Debug)]
 pub struct Screen {
     frame_layout: Layout,
     header_layout: Layout,
-    data_layout: Layout,
 }
 
 impl Default for Screen {
@@ -28,9 +29,6 @@ impl Default for Screen {
             header_layout: Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Ratio(4, 5), Constraint::Ratio(1, 5)]),
-            data_layout: Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Ratio(2, 5), Constraint::Ratio(3, 5)]),
         }
     }
 }
@@ -48,7 +46,13 @@ impl Screen {
         let header_chunks = self.header_layout.split(vertical_chunks[0]);
         frame.render_widget(file_name.0.clone(), header_chunks[0]);
         frame.render_widget(file_size.0.clone(), header_chunks[1]);
-        let data_chunks = self.data_layout.split(vertical_chunks[1]);
+        let data_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(contents_tree.state.width()),
+                Constraint::Min(0),
+            ])
+            .split(vertical_chunks[1]);
         frame.render_stateful_widget(
             contents_tree.widget.clone(),
             data_chunks[0],
@@ -137,14 +141,20 @@ impl Widget for GroupInfo {
             }
         }
 
-        Table::new(rows, [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-            .block(
-                Block::default()
-                    .title(self.name.clone())
-                    .border_style(Style::new().fg(GROUP_COLOR))
-                    .borders(Borders::ALL),
-            )
-            .render(area, buf);
+        Table::new(
+            rows,
+            [
+                Constraint::Length(max_label_width(&self.attrs, false)),
+                Constraint::Min(0),
+            ],
+        )
+        .block(
+            Block::default()
+                .title(self.name.clone())
+                .border_style(Style::new().fg(GROUP_COLOR))
+                .borders(Borders::ALL),
+        )
+        .render(area, buf);
     }
 }
 
@@ -162,6 +172,7 @@ const DATASET_COLOR: Color = Color::Green;
 
 impl Widget for DatasetInfo {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let left_column_width = max_dataset_label_width(&self.attrs);
         let mut rows = vec![
             Row::new(vec![Cell::from("Data Value"), Cell::from(self.data_value)]),
             Row::new(vec![
@@ -219,14 +230,17 @@ impl Widget for DatasetInfo {
             ]));
         }
 
-        Table::new(rows, [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-            .block(
-                Block::default()
-                    .title(self.name.clone())
-                    .border_style(Style::new().fg(DATASET_COLOR))
-                    .borders(Borders::ALL),
-            )
-            .render(area, buf);
+        Table::new(
+            rows,
+            [Constraint::Length(left_column_width), Constraint::Min(0)],
+        )
+        .block(
+            Block::default()
+                .title(self.name.clone())
+                .border_style(Style::new().fg(DATASET_COLOR))
+                .borders(Borders::ALL),
+        )
+        .render(area, buf);
     }
 }
 
@@ -234,4 +248,39 @@ impl From<DatasetInfo> for TreeItem<'_> {
     fn from(dataset: DatasetInfo) -> Self {
         Self::new(Text::raw(dataset.name), DATASET_COLOR, vec![])
     }
+}
+
+fn max_label_width(
+    attrs: &std::collections::HashMap<String, String>,
+    includes_nxclass: bool,
+) -> u16 {
+    let mut width = ["ID", "Link Type"]
+        .into_iter()
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    if includes_nxclass {
+        width = width.max(NXCLASS.len());
+    }
+    width = width.max(attrs.keys().map(|key| key.len()).max().unwrap_or(0));
+    (width as u16).max(INFO_LABEL_MIN_WIDTH)
+}
+
+fn max_dataset_label_width(attrs: &std::collections::HashMap<String, String>) -> u16 {
+    let width = [
+        "Data Value",
+        "Data Type",
+        "Shape",
+        "ID",
+        "Link Type",
+        "Layout",
+        "Chunk Shape",
+        "Filters",
+    ]
+    .into_iter()
+    .map(str::len)
+    .chain(attrs.keys().map(|key| key.len()))
+    .max()
+    .unwrap_or(0);
+    (width as u16).max(INFO_LABEL_MIN_WIDTH)
 }
