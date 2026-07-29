@@ -62,7 +62,7 @@ enum Mode {
 
 fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    file_info: FileInfo,
+    mut file_info: FileInfo,
 ) -> Result<(), anyhow::Error> {
     let mut mode = Mode::default();
     let screen = Screen::default();
@@ -118,6 +118,14 @@ fn run(
                         KeyCode::Right | KeyCode::Char('L'),
                         KeyModifiers::SHIFT,
                     ) => contents_tree.state.expand_all(),
+                    (&mut Mode::Normal, KeyCode::Char('p'), KeyModifiers::NONE) => {
+                        file_info.load_plot_data(
+                            contents_tree
+                                .state
+                                .position()
+                                .context("No selected entity")?,
+                        )?;
+                    }
                     (mode, KeyCode::Char('/'), KeyModifiers::NONE)
                         if matches!(mode, Mode::Normal) =>
                     {

@@ -25,7 +25,7 @@ pub enum EntityInfo {
     Dataset(DatasetInfo),
 }
 
-impl From<EntityInfo> for TreeItem<'_> {
+impl From<EntityInfo> for TreeItem<'static> {
     fn from(value: EntityInfo) -> Self {
         match value {
             EntityInfo::Group(info) => TreeItem::from(info),
@@ -239,10 +239,12 @@ pub struct DatasetInfo {
     pub id: i64,
     pub link_type: LinkKind,
     pub data_value: String,
+    pub plot_data: Option<Vec<(f64, f64)>>,
     pub shape: Vec<usize>,
     pub layout_info: DatasetLayoutInfo,
     pub dtype_descr: TypeDescriptor,
     pub attrs: HashMap<String, String>,
+    dataset: Dataset,
 }
 
 #[derive(Debug, Clone)]
@@ -279,11 +281,20 @@ impl DatasetInfo {
             id,
             link_type: link.link_type.into(),
             data_value,
+            plot_data: None,
             shape,
             layout_info,
             dtype_descr,
             attrs,
+            dataset,
         }
+    }
+
+    pub fn load_plot_data(&mut self) -> Result<bool, anyhow::Error> {
+        if self.plot_data.is_none() {
+            self.plot_data = dataset_plot_data(&self.dataset)?;
+        }
+        Ok(self.plot_data.is_some())
     }
 }
 
@@ -326,6 +337,71 @@ fn dataset_value(dataset: &Dataset) -> Result<String, anyhow::Error> {
         }
         _ => Ok(String::new()),
     }
+}
+
+fn dataset_plot_data(dataset: &Dataset) -> Result<Option<Vec<(f64, f64)>>, anyhow::Error> {
+    if dataset.shape().len() != 1 {
+        return Ok(None);
+    }
+
+    let dtype = dataset.dtype()?.to_descriptor()?;
+    let values = match dtype {
+        TypeDescriptor::Integer(hdf5::types::IntSize::U1) => dataset
+            .read_raw::<i8>()?
+            .into_iter()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Integer(hdf5::types::IntSize::U2) => dataset
+            .read_raw::<i16>()?
+            .into_iter()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Integer(hdf5::types::IntSize::U4) => dataset
+            .read_raw::<i32>()?
+            .into_iter()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Integer(hdf5::types::IntSize::U8) => dataset
+            .read_raw::<i64>()?
+            .into_iter()
+            .map(|value| value as f64)
+            .collect(),
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U1) => dataset
+            .read_raw::<u8>()?
+            .into_iter()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U2) => dataset
+            .read_raw::<u16>()?
+            .into_iter()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U4) => dataset
+            .read_raw::<u32>()?
+            .into_iter()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U8) => dataset
+            .read_raw::<u64>()?
+            .into_iter()
+            .map(|value| value as f64)
+            .collect(),
+        TypeDescriptor::Float(hdf5::types::FloatSize::U4) => dataset
+            .read_raw::<f32>()?
+            .into_iter()
+            .map(f64::from)
+            .collect(),
+        TypeDescriptor::Float(hdf5::types::FloatSize::U8) => dataset.read_raw::<f64>()?,
+        _ => return Ok(None),
+    };
+
+    Ok(Some(
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| (index as f64, value))
+            .collect(),
+    ))
 }
 
 fn is_string_dtype(dtype: &TypeDescriptor) -> bool {
@@ -416,7 +492,27 @@ impl FileInfo {
         Ok(entity.clone())
     }
 
-    pub fn to_tree_items(&self) -> Vec<TreeItem<'_>> {
+    pub fn load_plot_data(&mut self, index: Vec<usize>) -> Result<bool, anyhow::Error> {
+        let mut indices = index.into_iter();
+        let mut entity = self
+            .entities
+            .get_mut(indices.next().context("Index was empty")?)
+            .context("No entity at index")?;
+        for idx in indices {
+            match entity {
+                EntityInfo::Group(group) => {
+                    entity = group.entities.get_mut(idx).context("No entity at index")?
+                }
+                EntityInfo::Dataset(_) => Err(anyhow!("Cannot index into a dataset"))?,
+            }
+        }
+        match entity {
+            EntityInfo::Dataset(dataset) => dataset.load_plot_data(),
+            EntityInfo::Group(_) => Ok(false),
+        }
+    }
+
+    pub fn to_tree_items(&self) -> Vec<TreeItem<'static>> {
         self.entities
             .iter()
             .cloned()
@@ -678,7 +774,7 @@ fn dataset_info_reads_scalar_and_string_values() {
         .unwrap();
     array.as_writer().write(&[1, 2]).unwrap();
 
-    let file_info = FileInfo::read(&test_file).unwrap();
+    let mut file_info = FileInfo::read(&test_file).unwrap();
 
     let scalar_info = match file_info.entity(vec![0]).unwrap() {
         EntityInfo::Dataset(dataset) => dataset,
@@ -718,9 +814,22 @@ fn dataset_info_reads_scalar_and_string_values() {
     assert_eq!(scalar_unsigned_info.data_value, "16");
     assert_eq!(shape_one_int_info.data_value, "99");
     assert_eq!(shape_one_float_info.data_value, "2.5");
+    assert!(shape_one_int_info.plot_data.is_none());
+    assert!(shape_one_float_info.plot_data.is_none());
     assert_eq!(string_info.data_value, "alpha, beta");
+    assert!(string_info.plot_data.is_none());
     assert_eq!(unicode_info.data_value, "cafe\u{e9}");
+    assert!(unicode_info.plot_data.is_none());
     assert!(array_info.data_value.is_empty());
+    assert!(array_info.plot_data.is_none());
+
+    assert!(file_info.load_plot_data(vec![7]).unwrap());
+    let array_info = match file_info.entity(vec![7]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    assert_eq!(array_info.plot_data.as_ref().unwrap().len(), 2);
+    assert!(!file_info.load_plot_data(vec![5]).unwrap());
 
     std::fs::remove_file(test_file).unwrap();
 }

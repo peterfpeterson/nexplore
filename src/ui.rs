@@ -1,5 +1,6 @@
 use crate::{
     h5file::{DatasetInfo, DatasetLayoutInfo, EntityInfo, GroupInfo},
+    widgets::plot::Plot,
     widgets::tree::{Tree, TreeItem, TreeState},
 };
 use humansize::{format_size, ToF64, Unsigned, BINARY};
@@ -147,13 +148,16 @@ impl Widget for GroupInfo {
             self.name,
             GROUP_COLOR,
             max_label_width(&self.attrs, false),
-            info_rows,
-            attr_rows,
+            InfoPanelContent {
+                info_rows,
+                attr_rows,
+                plot: None,
+            },
         );
     }
 }
 
-impl From<GroupInfo> for TreeItem<'_> {
+impl From<GroupInfo> for TreeItem<'static> {
     fn from(group: GroupInfo) -> Self {
         Self::new(
             Text::raw(group.name),
@@ -168,6 +172,8 @@ const DATASET_COLOR: Color = Color::Green;
 impl Widget for DatasetInfo {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let left_column_width = max_dataset_label_width(&self.attrs);
+        let plot_data = self.plot_data.clone();
+        let plot_title = self.name.clone();
         let info_rows = vec![
             Row::new(vec![Cell::from("Data Value"), Cell::from(self.data_value)]),
             Row::new(vec![
@@ -232,13 +238,16 @@ impl Widget for DatasetInfo {
             self.name,
             DATASET_COLOR,
             left_column_width,
-            info_rows,
-            attr_rows,
+            InfoPanelContent {
+                info_rows,
+                attr_rows,
+                plot: plot_data.map(|points| Plot::new(format!("Plot: {plot_title}"), points)),
+            },
         );
     }
 }
 
-impl From<DatasetInfo> for TreeItem<'_> {
+impl From<DatasetInfo> for TreeItem<'static> {
     fn from(dataset: DatasetInfo) -> Self {
         Self::new(Text::raw(dataset.name), DATASET_COLOR, vec![])
     }
@@ -279,15 +288,25 @@ fn max_dataset_label_width(attrs: &std::collections::HashMap<String, String>) ->
     (width as u16).max(INFO_LABEL_MIN_WIDTH)
 }
 
+struct InfoPanelContent<'a> {
+    info_rows: Vec<Row<'a>>,
+    attr_rows: Vec<Row<'a>>,
+    plot: Option<Plot>,
+}
+
 fn render_info_panel(
     area: Rect,
     buf: &mut Buffer,
     title: String,
     color: Color,
     left_column_width: u16,
-    info_rows: Vec<Row>,
-    attr_rows: Vec<Row>,
+    content: InfoPanelContent<'_>,
 ) {
+    let InfoPanelContent {
+        info_rows,
+        attr_rows,
+        plot,
+    } = content;
     let block = Block::default()
         .title(title)
         .border_style(Style::new().fg(color))
@@ -296,9 +315,36 @@ fn render_info_panel(
     Clear.render(area, buf);
     block.render(area, buf);
 
+    if let Some(plot) = plot {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(plot_height(inner.height)),
+            ])
+            .split(inner);
+        render_metadata_panel(chunks[0], buf, left_column_width, info_rows, attr_rows);
+        plot.render(chunks[1], buf);
+        return;
+    }
+
+    render_metadata_panel(inner, buf, left_column_width, info_rows, attr_rows);
+}
+
+fn render_metadata_panel(
+    area: Rect,
+    buf: &mut Buffer,
+    left_column_width: u16,
+    info_rows: Vec<Row>,
+    attr_rows: Vec<Row>,
+) {
+    if area.height == 0 {
+        return;
+    }
+
     let info_height = info_rows.len() as u16;
     let separator_height = u16::from(!attr_rows.is_empty());
-    let attr_height = inner.height.saturating_sub(info_height + separator_height);
+    let attr_height = area.height.saturating_sub(info_height + separator_height);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -306,7 +352,7 @@ fn render_info_panel(
             Constraint::Length(separator_height),
             Constraint::Length(attr_height),
         ])
-        .split(inner);
+        .split(area);
 
     Table::new(
         info_rows,
@@ -323,4 +369,8 @@ fn render_info_panel(
         )
         .render(chunks[2], buf);
     }
+}
+
+fn plot_height(area_height: u16) -> u16 {
+    (area_height / 2).max(8)
 }
