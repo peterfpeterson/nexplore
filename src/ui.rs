@@ -7,16 +7,17 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    text::Text,
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Widget},
+    text::{Line, Text},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Widget},
     Frame,
 };
+
+const INFO_LABEL_MIN_WIDTH: u16 = 20;
 
 #[derive(Debug)]
 pub struct Screen {
     frame_layout: Layout,
     header_layout: Layout,
-    data_layout: Layout,
 }
 
 impl Default for Screen {
@@ -28,9 +29,6 @@ impl Default for Screen {
             header_layout: Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Ratio(4, 5), Constraint::Ratio(1, 5)]),
-            data_layout: Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Ratio(2, 5), Constraint::Ratio(3, 5)]),
         }
     }
 }
@@ -48,7 +46,13 @@ impl Screen {
         let header_chunks = self.header_layout.split(vertical_chunks[0]);
         frame.render_widget(file_name.0.clone(), header_chunks[0]);
         frame.render_widget(file_size.0.clone(), header_chunks[1]);
-        let data_chunks = self.data_layout.split(vertical_chunks[1]);
+        let data_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(contents_tree.state.width()),
+                Constraint::Min(0),
+            ])
+            .split(vertical_chunks[1]);
         frame.render_stateful_widget(
             contents_tree.widget.clone(),
             data_chunks[0],
@@ -111,7 +115,7 @@ const NXCLASS: &str = "NX_class";
 
 impl Widget for GroupInfo {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let mut rows = vec![
+        let mut info_rows = vec![
             Row::new(vec![Cell::from("ID"), Cell::from(self.id.to_string())]),
             Row::new(vec![
                 Cell::from("Link Type"),
@@ -119,7 +123,7 @@ impl Widget for GroupInfo {
             ]),
         ];
         if self.attrs.contains_key(NXCLASS) {
-            rows.insert(
+            info_rows.insert(
                 0,
                 Row::new(vec![
                     Cell::from(NXCLASS),
@@ -127,24 +131,25 @@ impl Widget for GroupInfo {
                 ]),
             );
         }
-        // add the attributes
+        let mut attr_rows = Vec::new();
         for (key, value) in &self.attrs {
             if key != NXCLASS {
-                rows.push(Row::new(vec![
+                attr_rows.push(Row::new(vec![
                     Cell::from(key.to_string()),
                     Cell::from(value.to_string()),
                 ]));
             }
         }
 
-        Table::new(rows, [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-            .block(
-                Block::default()
-                    .title(self.name.clone())
-                    .border_style(Style::new().fg(GROUP_COLOR))
-                    .borders(Borders::ALL),
-            )
-            .render(area, buf);
+        render_info_panel(
+            area,
+            buf,
+            self.name,
+            GROUP_COLOR,
+            max_label_width(&self.attrs, false),
+            info_rows,
+            attr_rows,
+        );
     }
 }
 
@@ -162,7 +167,9 @@ const DATASET_COLOR: Color = Color::Green;
 
 impl Widget for DatasetInfo {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let mut rows = vec![
+        let left_column_width = max_dataset_label_width(&self.attrs);
+        let info_rows = vec![
+            Row::new(vec![Cell::from("Data Value"), Cell::from(self.data_value)]),
             Row::new(vec![
                 Cell::from("Data Type"),
                 Cell::from(self.dtype_descr.to_string()),
@@ -190,6 +197,7 @@ impl Widget for DatasetInfo {
             ]),
         ];
 
+        let mut info_rows = info_rows;
         match self.layout_info.clone() {
             DatasetLayoutInfo::Compact {} => {}
             DatasetLayoutInfo::Contiguous {} => {}
@@ -197,7 +205,7 @@ impl Widget for DatasetInfo {
                 chunk_shape,
                 filters,
             } => {
-                rows.append(&mut vec![
+                info_rows.append(&mut vec![
                     Row::new(vec![
                         Cell::from("Chunk Shape"),
                         Cell::from(format!("{chunk_shape:?}")),
@@ -210,27 +218,109 @@ impl Widget for DatasetInfo {
             }
             DatasetLayoutInfo::Virtial {} => {}
         }
-        // add the attributes
+        let mut attr_rows = Vec::new();
         for (key, value) in &self.attrs {
-            rows.push(Row::new(vec![
+            attr_rows.push(Row::new(vec![
                 Cell::from(key.to_string()),
                 Cell::from(value.to_string()),
             ]));
         }
 
-        Table::new(rows, [Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-            .block(
-                Block::default()
-                    .title(self.name.clone())
-                    .border_style(Style::new().fg(DATASET_COLOR))
-                    .borders(Borders::ALL),
-            )
-            .render(area, buf);
+        render_info_panel(
+            area,
+            buf,
+            self.name,
+            DATASET_COLOR,
+            left_column_width,
+            info_rows,
+            attr_rows,
+        );
     }
 }
 
 impl From<DatasetInfo> for TreeItem<'_> {
     fn from(dataset: DatasetInfo) -> Self {
         Self::new(Text::raw(dataset.name), DATASET_COLOR, vec![])
+    }
+}
+
+fn max_label_width(
+    attrs: &std::collections::HashMap<String, String>,
+    includes_nxclass: bool,
+) -> u16 {
+    let mut width = ["ID", "Link Type"]
+        .into_iter()
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    if includes_nxclass {
+        width = width.max(NXCLASS.len());
+    }
+    width = width.max(attrs.keys().map(|key| key.len()).max().unwrap_or(0));
+    (width as u16).max(INFO_LABEL_MIN_WIDTH)
+}
+
+fn max_dataset_label_width(attrs: &std::collections::HashMap<String, String>) -> u16 {
+    let width = [
+        "Data Value",
+        "Data Type",
+        "Shape",
+        "ID",
+        "Link Type",
+        "Layout",
+        "Chunk Shape",
+        "Filters",
+    ]
+    .into_iter()
+    .map(str::len)
+    .chain(attrs.keys().map(|key| key.len()))
+    .max()
+    .unwrap_or(0);
+    (width as u16).max(INFO_LABEL_MIN_WIDTH)
+}
+
+fn render_info_panel(
+    area: Rect,
+    buf: &mut Buffer,
+    title: String,
+    color: Color,
+    left_column_width: u16,
+    info_rows: Vec<Row>,
+    attr_rows: Vec<Row>,
+) {
+    let block = Block::default()
+        .title(title)
+        .border_style(Style::new().fg(color))
+        .borders(Borders::ALL);
+    let inner = block.inner(area);
+    Clear.render(area, buf);
+    block.render(area, buf);
+
+    let info_height = info_rows.len() as u16;
+    let separator_height = u16::from(!attr_rows.is_empty());
+    let attr_height = inner.height.saturating_sub(info_height + separator_height);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(info_height),
+            Constraint::Length(separator_height),
+            Constraint::Length(attr_height),
+        ])
+        .split(inner);
+
+    Table::new(
+        info_rows,
+        [Constraint::Length(left_column_width), Constraint::Min(0)],
+    )
+    .render(chunks[0], buf);
+
+    if separator_height == 1 {
+        let separator = "─".repeat(chunks[1].width as usize);
+        Paragraph::new(Line::raw(separator)).render(chunks[1], buf);
+        Table::new(
+            attr_rows,
+            [Constraint::Length(left_column_width), Constraint::Min(0)],
+        )
+        .render(chunks[2], buf);
     }
 }

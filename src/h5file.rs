@@ -8,6 +8,9 @@ use hdf5::{
     LinkType, Location,
 };
 use hdf5_sys::h5a::H5Aread;
+use hdf5_sys::h5d::H5Dread;
+use hdf5_sys::h5p::H5P_DEFAULT;
+use hdf5_sys::h5s::H5S_ALL;
 use std::collections::HashMap;
 #[cfg(test)]
 use std::str::FromStr;
@@ -76,14 +79,14 @@ fn to_string(field: &Container) -> Result<String, anyhow::Error> {
             Ok(field.read_scalar::<f64>()?.to_string())
         }
         // Handle fixed-length ASCII string scalars and 1D arrays.
-        TypeDescriptor::FixedAscii(size) => decode_fixed_width_strings(field, *size),
+        TypeDescriptor::FixedAscii(size) => decode_fixed_width_attribute_strings(field, *size),
         // Handle fixed-length UTF-8 string
-        TypeDescriptor::FixedUnicode(size) => decode_fixed_width_strings(field, *size),
+        TypeDescriptor::FixedUnicode(size) => decode_fixed_width_attribute_strings(field, *size),
         _ => Err(anyhow!("unsupported attribute string type: {dtype}")),
     }
 }
 
-fn decode_fixed_width_strings(
+fn decode_fixed_width_attribute_strings(
     field: &Container,
     element_width: usize,
 ) -> Result<String, anyhow::Error> {
@@ -95,18 +98,64 @@ fn decode_fixed_width_strings(
     let mut raw = vec![0u8; field.storage_size() as usize];
     let result = sync(|| unsafe { H5Aread(field.id(), dtype.id(), raw.as_mut_ptr().cast()) });
     if result < 0 {
-        return Err(anyhow!("failed to read fixed-width string attribute bytes"));
+        return Err(anyhow!("failed to read fixed-width string bytes"));
     }
 
-    if field.is_scalar() {
-        return Ok(decode_fixed_width_string(&raw));
+    decode_fixed_width_bytes(
+        &raw,
+        field.is_scalar(),
+        field.ndim(),
+        field.shape(),
+        element_width,
+    )
+}
+
+fn decode_fixed_width_dataset_strings(
+    dataset: &Dataset,
+    element_width: usize,
+) -> Result<String, anyhow::Error> {
+    if element_width == 0 {
+        return Ok(String::new());
     }
 
-    if field.ndim() != 1 {
-        return Err(anyhow!(
-            "unsupported fixed-width string shape: {:?}",
-            field.shape()
-        ));
+    let dtype = dataset.dtype()?;
+    let mut raw = vec![0u8; dataset.storage_size() as usize];
+    let result = sync(|| unsafe {
+        H5Dread(
+            dataset.id(),
+            dtype.id(),
+            H5S_ALL,
+            H5S_ALL,
+            H5P_DEFAULT,
+            raw.as_mut_ptr().cast(),
+        )
+    });
+    if result < 0 {
+        return Err(anyhow!("failed to read fixed-width string bytes"));
+    }
+
+    decode_fixed_width_bytes(
+        &raw,
+        dataset.is_scalar(),
+        dataset.ndim(),
+        dataset.shape(),
+        element_width,
+    )
+}
+
+fn decode_fixed_width_bytes(
+    raw: &[u8],
+    is_scalar: bool,
+    ndim: usize,
+    shape: Vec<usize>,
+    element_width: usize,
+) -> Result<String, anyhow::Error> {
+    if is_scalar {
+        return Ok(decode_fixed_width_string(raw));
+    }
+
+    if ndim != 1 {
+        return Err(anyhow!("unsupported fixed-width string shape: {:?}", shape));
     }
 
     Ok(raw
@@ -189,6 +238,7 @@ pub struct DatasetInfo {
     pub name: String,
     pub id: i64,
     pub link_type: LinkKind,
+    pub data_value: String,
     pub shape: Vec<usize>,
     pub layout_info: DatasetLayoutInfo,
     pub dtype_descr: TypeDescriptor,
@@ -210,6 +260,7 @@ impl DatasetInfo {
     fn from_dataset_and_link(dataset: Dataset, link: LinkInfo) -> Self {
         let name = dataset.name().split('/').next_back().unwrap().to_string();
         let id = dataset.id();
+        let data_value = dataset_value(&dataset).unwrap_or_default();
         let shape = dataset.shape();
         let layout_info = match dataset.layout() {
             Layout::Compact => DatasetLayoutInfo::Compact {},
@@ -227,12 +278,64 @@ impl DatasetInfo {
             name,
             id,
             link_type: link.link_type.into(),
+            data_value,
             shape,
             layout_info,
             dtype_descr,
             attrs,
         }
     }
+}
+
+fn dataset_value(dataset: &Dataset) -> Result<String, anyhow::Error> {
+    let dtype = dataset.dtype()?.to_descriptor()?;
+    match &dtype {
+        TypeDescriptor::FixedAscii(size) | TypeDescriptor::FixedUnicode(size) => {
+            decode_fixed_width_dataset_strings(dataset, *size)
+        }
+        _ if dataset.is_scalar() || is_string_dtype(&dtype) => to_string(dataset),
+        TypeDescriptor::Integer(hdf5::types::IntSize::U1) if dataset.size() == 1 => {
+            Ok(dataset.read_raw::<i8>()?[0].to_string())
+        }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U2) if dataset.size() == 1 => {
+            Ok(dataset.read_raw::<i16>()?[0].to_string())
+        }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U4) if dataset.size() == 1 => {
+            Ok(dataset.read_raw::<i32>()?[0].to_string())
+        }
+        TypeDescriptor::Integer(hdf5::types::IntSize::U8) if dataset.size() == 1 => {
+            Ok(dataset.read_raw::<i64>()?[0].to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U1) if dataset.size() == 1 => {
+            Ok(dataset.read_raw::<u8>()?[0].to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U2) if dataset.size() == 1 => {
+            Ok(dataset.read_raw::<u16>()?[0].to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U4) if dataset.size() == 1 => {
+            Ok(dataset.read_raw::<u32>()?[0].to_string())
+        }
+        TypeDescriptor::Unsigned(hdf5::types::IntSize::U8) if dataset.size() == 1 => {
+            Ok(dataset.read_raw::<u64>()?[0].to_string())
+        }
+        TypeDescriptor::Float(hdf5::types::FloatSize::U4) if dataset.size() == 1 => {
+            Ok(dataset.read_raw::<f32>()?[0].to_string())
+        }
+        TypeDescriptor::Float(hdf5::types::FloatSize::U8) if dataset.size() == 1 => {
+            Ok(dataset.read_raw::<f64>()?[0].to_string())
+        }
+        _ => Ok(String::new()),
+    }
+}
+
+fn is_string_dtype(dtype: &TypeDescriptor) -> bool {
+    matches!(
+        dtype,
+        TypeDescriptor::VarLenAscii
+            | TypeDescriptor::VarLenUnicode
+            | TypeDescriptor::FixedAscii(_)
+            | TypeDescriptor::FixedUnicode(_)
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -496,6 +599,128 @@ fn get_attrs_reads_ascii_and_unicode_strings() {
     assert_eq!(attrs.get("unsigned_u8|uint64").unwrap(), "64");
     assert_eq!(attrs.get("float_u4|float32").unwrap(), "3.5");
     assert_eq!(attrs.get("float_u8|float64").unwrap(), "7.25");
+
+    std::fs::remove_file(test_file).unwrap();
+}
+
+#[test]
+fn dataset_info_reads_scalar_and_string_values() {
+    use hdf5::types::{FixedAscii, VarLenUnicode};
+
+    let test_file =
+        std::env::temp_dir().join(format!("nexplore-dataset-values-{}.h5", std::process::id()));
+    let _ = std::fs::remove_file(&test_file);
+
+    let file = File::create(&test_file).unwrap();
+
+    let scalar = file
+        .new_dataset::<i32>()
+        .shape(())
+        .create("scalar")
+        .unwrap();
+    scalar.as_writer().write_scalar(&12).unwrap();
+
+    let scalar_float = file
+        .new_dataset::<f64>()
+        .shape(())
+        .create("scalar_float")
+        .unwrap();
+    scalar_float.as_writer().write_scalar(&7.25).unwrap();
+
+    let scalar_unsigned = file
+        .new_dataset::<u16>()
+        .shape(())
+        .create("scalar_unsigned")
+        .unwrap();
+    scalar_unsigned.as_writer().write_scalar(&16).unwrap();
+
+    let shape_one_int = file
+        .new_dataset::<i32>()
+        .shape([1])
+        .create("shape_one_int")
+        .unwrap();
+    shape_one_int.as_writer().write(&[99]).unwrap();
+
+    let shape_one_float = file
+        .new_dataset::<f32>()
+        .shape([1])
+        .create("shape_one_float")
+        .unwrap();
+    shape_one_float.as_writer().write(&[2.5]).unwrap();
+
+    let string = file
+        .new_dataset::<FixedAscii<12>>()
+        .shape([2])
+        .create("string")
+        .unwrap();
+    string
+        .as_writer()
+        .write(&[
+            FixedAscii::<12>::from_ascii(b"alpha").unwrap(),
+            FixedAscii::<12>::from_ascii(b"beta").unwrap(),
+        ])
+        .unwrap();
+
+    let unicode = file
+        .new_dataset::<VarLenUnicode>()
+        .shape(())
+        .create("unicode")
+        .unwrap();
+    unicode
+        .as_writer()
+        .write_scalar(&VarLenUnicode::from_str("cafe\u{e9}").unwrap())
+        .unwrap();
+
+    let array = file
+        .new_dataset::<i32>()
+        .shape([2])
+        .create("array")
+        .unwrap();
+    array.as_writer().write(&[1, 2]).unwrap();
+
+    let file_info = FileInfo::read(&test_file).unwrap();
+
+    let scalar_info = match file_info.entity(vec![0]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    let scalar_float_info = match file_info.entity(vec![1]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    let scalar_unsigned_info = match file_info.entity(vec![2]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    let shape_one_int_info = match file_info.entity(vec![3]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    let shape_one_float_info = match file_info.entity(vec![4]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    let string_info = match file_info.entity(vec![5]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    let unicode_info = match file_info.entity(vec![6]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    let array_info = match file_info.entity(vec![7]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+
+    assert_eq!(scalar_info.data_value, "12");
+    assert_eq!(scalar_float_info.data_value, "7.25");
+    assert_eq!(scalar_unsigned_info.data_value, "16");
+    assert_eq!(shape_one_int_info.data_value, "99");
+    assert_eq!(shape_one_float_info.data_value, "2.5");
+    assert_eq!(string_info.data_value, "alpha, beta");
+    assert_eq!(unicode_info.data_value, "cafe\u{e9}");
+    assert!(array_info.data_value.is_empty());
 
     std::fs::remove_file(test_file).unwrap();
 }
