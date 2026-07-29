@@ -1,13 +1,13 @@
 [package]
 name = "nexplore"
-version = "0.2.0"
-edition = "2021"
-authors = ["Garry O'Donnell <garry.euan.odonnell@ntlworld.com>"]
+version = "1.0.0-rc.1"
+edition = "2024"
+authors = ["Garry O'Donnell <garry.euan.odonnell@ntlworld.com>", "Pete Peterson <petersonpf@ornl.gov>"]
 description = "A Terminal User Interface (TUI) for exploring hdf5 & NeXus files"
 license = "MIT"
 keywords = ["hdf5", "nexus", "tui"]
 categories = ["command-line-utilities", "science", "visualization"]
-repository = "https://github.com/garryod/nexplore"
+repository = "https://github.com/peterfpeterson/nexplore"
 
 [dependencies]
 anyhow = { version = "1.0.104" }
