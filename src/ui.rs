@@ -316,12 +316,16 @@ fn render_info_panel(
     block.render(area, buf);
 
     if let Some(plot) = plot {
+        let metadata_height = u16::try_from(
+            info_rows
+                .len()
+                .saturating_add(attr_rows.len())
+                .saturating_add(usize::from(!attr_rows.is_empty())),
+        )
+        .unwrap_or(u16::MAX);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(0),
-                Constraint::Length(plot_height(inner.height)),
-            ])
+            .constraints([Constraint::Length(metadata_height), Constraint::Min(0)])
             .split(inner);
         render_metadata_panel(chunks[0], buf, left_column_width, info_rows, attr_rows);
         plot.render(chunks[1], buf);
@@ -369,8 +373,4 @@ fn render_metadata_panel(
         )
         .render(chunks[2], buf);
     }
-}
-
-fn plot_height(area_height: u16) -> u16 {
-    (area_height / 2).max(8)
 }
