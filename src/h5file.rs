@@ -570,7 +570,7 @@ impl FileInfo {
 #[cfg(test)]
 fn get_file_path(filename: &str) -> PathBuf {
     // cargo sets where project root is
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     PathBuf::from(manifest_dir).join(filename)
 }
 
