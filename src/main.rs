@@ -69,9 +69,19 @@ fn run(
     let file_name = FileName::new(file_info.name.clone());
     let file_size = FileSize::new(file_info.size);
     let mut contents_tree = ContentsTree::new(file_info.to_tree_items());
+    let mut plotted_entity = None;
     loop {
+        let selected_entity = contents_tree
+            .state
+            .position()
+            .context("No selected entity")?;
+        if plotted_entity.as_ref() != Some(&selected_entity) {
+            if let Some(previous_entity) = plotted_entity.take() {
+                file_info.unload_plot_data(previous_entity)?;
+            }
+        }
         let entity_info = file_info
-            .entity(contents_tree.state.position().unwrap())
+            .entity(selected_entity)
             .context("Could not find selected entity")?;
         terminal.draw(|frame| {
             screen.render(
@@ -119,12 +129,16 @@ fn run(
                         KeyModifiers::SHIFT,
                     ) => contents_tree.state.expand_all(),
                     (&mut Mode::Normal, KeyCode::Char('p'), KeyModifiers::NONE) => {
-                        file_info.load_plot_data(
-                            contents_tree
-                                .state
-                                .position()
-                                .context("No selected entity")?,
-                        )?;
+                        let selected_entity = contents_tree
+                            .state
+                            .position()
+                            .context("No selected entity")?;
+                        if plotted_entity.as_ref() == Some(&selected_entity) {
+                            file_info.unload_plot_data(selected_entity)?;
+                            plotted_entity = None;
+                        } else if file_info.load_plot_data(selected_entity.clone())? {
+                            plotted_entity = Some(selected_entity);
+                        }
                     }
                     (mode, KeyCode::Char('/'), KeyModifiers::NONE)
                         if matches!(mode, Mode::Normal) =>

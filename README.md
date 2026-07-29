@@ -21,4 +21,4 @@ nexplore path/to/file.h5
 | Expand Group     | Right \| L          |
 | Collapse All     | Shift + Left \| H   |
 | Expand All       | Shift + Right \| L  |
-| Plot Dataset     | P                   |
+| Toggle Plot      | P                   |

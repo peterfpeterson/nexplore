@@ -296,6 +296,10 @@ impl DatasetInfo {
         }
         Ok(self.plot_data.is_some())
     }
+
+    pub fn unload_plot_data(&mut self) -> bool {
+        self.plot_data.take().is_some()
+    }
 }
 
 fn dataset_value(dataset: &Dataset) -> Result<String, anyhow::Error> {
@@ -493,6 +497,20 @@ impl FileInfo {
     }
 
     pub fn load_plot_data(&mut self, index: Vec<usize>) -> Result<bool, anyhow::Error> {
+        match self.entity_mut(index)? {
+            EntityInfo::Dataset(dataset) => dataset.load_plot_data(),
+            EntityInfo::Group(_) => Ok(false),
+        }
+    }
+
+    pub fn unload_plot_data(&mut self, index: Vec<usize>) -> Result<bool, anyhow::Error> {
+        Ok(match self.entity_mut(index)? {
+            EntityInfo::Dataset(dataset) => dataset.unload_plot_data(),
+            EntityInfo::Group(_) => false,
+        })
+    }
+
+    fn entity_mut(&mut self, index: Vec<usize>) -> Result<&mut EntityInfo, anyhow::Error> {
         let mut indices = index.into_iter();
         let mut entity = self
             .entities
@@ -506,10 +524,7 @@ impl FileInfo {
                 EntityInfo::Dataset(_) => Err(anyhow!("Cannot index into a dataset"))?,
             }
         }
-        match entity {
-            EntityInfo::Dataset(dataset) => dataset.load_plot_data(),
-            EntityInfo::Group(_) => Ok(false),
-        }
+        Ok(entity)
     }
 
     pub fn to_tree_items(&self) -> Vec<TreeItem<'static>> {
@@ -830,6 +845,13 @@ fn dataset_info_reads_scalar_and_string_values() {
     };
     assert_eq!(array_info.plot_data.as_ref().unwrap().len(), 2);
     assert!(!file_info.load_plot_data(vec![5]).unwrap());
+    assert!(file_info.unload_plot_data(vec![7]).unwrap());
+    let array_info = match file_info.entity(vec![7]).unwrap() {
+        EntityInfo::Dataset(dataset) => dataset,
+        EntityInfo::Group(_) => panic!("expected dataset"),
+    };
+    assert!(array_info.plot_data.is_none());
+    assert!(!file_info.unload_plot_data(vec![7]).unwrap());
 
     std::fs::remove_file(test_file).unwrap();
 }
